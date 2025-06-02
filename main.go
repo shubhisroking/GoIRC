@@ -15,14 +15,31 @@ import (
 )
 
 const (
-	ircServer    = "irc.libera.chat:6697"
-	ircChannel   = "#bubbletea-test"
-	ircNick      = "bubbletea-user"
-	headerHeight = 4
-	footerHeight = 4
-	statusHeight = 1
-	minWidth     = 80
-	minHeight    = 24
+	defaultServer  = "irc.libera.chat:6697"
+	defaultChannel = "#bubbletea-test"
+	defaultNick    = "bubbletea-user"
+	headerHeight   = 4
+	footerHeight   = 4
+	statusHeight   = 1
+	minWidth       = 80
+	minHeight      = 24
+)
+
+type appState int
+
+const (
+	stateSetup appState = iota
+	stateConnecting
+	stateConnected
+)
+
+type setupPhase int
+
+const (
+	setupServer setupPhase = iota
+	setupNick
+	setupChannels
+	setupConfirm
 )
 
 var p *tea.Program
@@ -40,6 +57,19 @@ type model struct {
 	currentNick    string
 	width          int
 	height         int
+
+	state            appState
+	setupPhase       setupPhase
+	config           ircConfig
+	setupPrompt      string
+	autoJoinChannels []string
+}
+
+type ircConfig struct {
+	Server   string
+	Nick     string
+	Channels []string
+	UseSSL   bool
 }
 
 type (
@@ -55,47 +85,52 @@ type (
 
 func initialModel() model {
 	ta := textarea.New()
-	ta.Placeholder = "💬 Type your message here... (Press Enter to send, Ctrl+C to quit)"
 	ta.Focus()
-
 	ta.Prompt = "▶ "
 	ta.CharLimit = 500
-
 	ta.SetWidth(minWidth)
 	ta.SetHeight(1)
-
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.ShowLineNumbers = false
 
-	ta.FocusedStyle.Base = lipgloss.NewStyle()
-	ta.BlurredStyle.Base = lipgloss.NewStyle()
-
 	vp := viewport.New(minWidth, 10)
-	vp.SetContent(systemMessageStyle.Render("🔌 Connecting to IRC server..."))
 
 	return model{
-		textarea:       ta,
-		messages:       []string{},
-		viewport:       vp,
-		ready:          false,
-		connected:      false,
-		currentChannel: ircChannel,
-		currentNick:    ircNick,
-		width:          minWidth,
-		height:         minHeight,
+		textarea:   ta,
+		messages:   []string{},
+		viewport:   vp,
+		ready:      false,
+		connected:  false,
+		width:      minWidth,
+		height:     minHeight,
+		state:      stateSetup,
+		setupPhase: setupServer,
+		config: ircConfig{
+			Server:   defaultServer,
+			Nick:     defaultNick,
+			Channels: []string{defaultChannel},
+			UseSSL:   true,
+		},
+		setupPrompt:      "",
+		autoJoinChannels: []string{},
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.connectToIRC())
+	return textarea.Blink
 }
 
 func (m *model) connectToIRC() tea.Cmd {
 	return func() tea.Msg {
-		cfg := irc.NewConfig(ircNick)
-		cfg.SSL = true
-		cfg.SSLConfig = &tls.Config{ServerName: strings.Split(ircServer, ":")[0]}
-		cfg.Server = ircServer
+		cfg := irc.NewConfig(m.config.Nick)
+		cfg.SSL = m.config.UseSSL
+
+		if m.config.UseSSL {
+			serverHost := strings.Split(m.config.Server, ":")[0]
+			cfg.SSLConfig = &tls.Config{ServerName: serverHost}
+		}
+
+		cfg.Server = m.config.Server
 		cfg.NewNick = func(n string) string { return n + "_" }
 
 		c := irc.Client(cfg)
@@ -103,7 +138,13 @@ func (m *model) connectToIRC() tea.Cmd {
 		c.HandleFunc(irc.CONNECTED, func(conn *irc.Conn, line *irc.Line) {
 			log.Println("Connected to IRC")
 			log.Printf("Our actual nickname is: %s", conn.Me().Nick)
-			conn.Join(ircChannel)
+
+			for _, channel := range m.config.Channels {
+				if channel != "" {
+					conn.Join(channel)
+				}
+			}
+
 			if p != nil {
 				p.Send(ircConnectedMsg{})
 			}
@@ -191,6 +232,73 @@ func (m *model) connectToIRC() tea.Cmd {
 	}
 }
 
+func (m *model) handleSetupInput(input string) tea.Cmd {
+	input = strings.TrimSpace(input)
+
+	switch m.setupPhase {
+	case setupServer:
+		if input != "" {
+			m.config.Server = input
+		}
+
+		if strings.Contains(m.config.Server, ":6697") || strings.Contains(m.config.Server, ":7000") {
+			m.config.UseSSL = true
+		} else if strings.Contains(m.config.Server, ":6667") {
+			m.config.UseSSL = false
+		}
+		m.setupPhase = setupNick
+		m.textarea.Placeholder = "Enter your nickname or press Enter for default..."
+		m.textarea.Reset()
+
+	case setupNick:
+		if input != "" {
+			m.config.Nick = input
+		}
+		m.setupPhase = setupChannels
+		m.textarea.Placeholder = "Enter channels to join (comma-separated, e.g., #channel1,#channel2) or press Enter for default..."
+		m.textarea.Reset()
+
+	case setupChannels:
+		if input != "" {
+			channels := strings.Split(input, ",")
+			m.config.Channels = []string{}
+			for _, ch := range channels {
+				ch = strings.TrimSpace(ch)
+				if ch != "" {
+					if !strings.HasPrefix(ch, "#") {
+						ch = "#" + ch
+					}
+					m.config.Channels = append(m.config.Channels, ch)
+				}
+			}
+		}
+		m.setupPhase = setupConfirm
+		m.textarea.Placeholder = "Press Enter to connect or 'r' to restart setup..."
+		m.textarea.Reset()
+
+	case setupConfirm:
+		if strings.ToLower(input) == "r" || strings.ToLower(input) == "restart" {
+			m.setupPhase = setupServer
+			m.config = ircConfig{
+				Server:   defaultServer,
+				Nick:     defaultNick,
+				Channels: []string{defaultChannel},
+				UseSSL:   true,
+			}
+			m.textarea.Placeholder = "Enter IRC server (e.g., irc.libera.chat:6697) or press Enter for default..."
+			m.textarea.Reset()
+		} else {
+			m.state = stateConnecting
+			m.currentChannel = m.config.Channels[0]
+			m.currentNick = m.config.Nick
+			m.textarea.Placeholder = "💬 Type your message here... (Press Enter to send, Ctrl+C to quit)"
+			return m.connectToIRC()
+		}
+	}
+
+	return nil
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		tiCmd tea.Cmd
@@ -210,30 +318,52 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		UpdateStyleWidths(msg.Width)
 
 		m.ready = true
-		m.viewport.SetContent(strings.Join(m.messages, "\n"))
-		m.viewport.GotoBottom()
+		if m.state == stateConnected || m.state == stateConnecting {
+			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+			m.viewport.GotoBottom()
+		}
 
 		m.textarea, tiCmd = m.textarea.Update(msg)
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		return m, tea.Batch(tiCmd, vpCmd)
 	}
 
+	if m.state == stateSetup {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.Type {
+			case tea.KeyCtrlC, tea.KeyEsc:
+				return m, tea.Quit
+			case tea.KeyEnter:
+				inputValue := m.textarea.Value()
+				cmd := m.handleSetupInput(inputValue)
+				return m, cmd
+			}
+		}
+
+		m.textarea, tiCmd = m.textarea.Update(msg)
+		return m, tiCmd
+	}
+
 	switch msg := msg.(type) {
 	case ircClientReadyMsg:
-
 		m.ircClient = msg.client
 		log.Println("IRC client initialized and stored in model")
 
 	case ircConnectedMsg:
 		m.connected = true
 		m.connectionTime = time.Now()
+		m.state = stateConnected
 
 		if m.ircClient != nil && m.ircClient.Connected() {
 			actualNick := m.ircClient.Me().Nick
 			m.currentNick = actualNick
 			log.Printf("Connected with nickname: %s", actualNick)
 		}
-		m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("✅ Connected to %s and joined %s", ircServer, ircChannel)))
+
+		channelList := strings.Join(m.config.Channels, ", ")
+		m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("✅ Connected to %s", m.config.Server)))
+		m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("📋 Joined channels: %s", channelList)))
 		m.viewport.SetContent(strings.Join(m.messages, "\n"))
 		m.viewport.GotoBottom()
 
@@ -263,7 +393,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case ircNickChangeMsg:
-
 		if msg.oldNick == m.currentNick {
 			m.currentNick = msg.newNick
 			log.Printf("Our nick changed from %s to %s", msg.oldNick, msg.newNick)
@@ -274,8 +403,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 
 	case ircJoinMsg:
-
-		if msg.user == m.currentNick || msg.user == ircNick || strings.HasPrefix(msg.user, ircNick) {
+		if msg.user == m.currentNick || msg.user == m.config.Nick || strings.HasPrefix(msg.user, m.config.Nick) {
 			m.currentChannel = msg.channel
 			m.currentNick = msg.user
 			log.Printf("Updated current channel to: %s and nick to: %s", msg.channel, msg.user)
@@ -293,7 +421,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case tea.KeyEnter:
-
 			if m.ircClient == nil {
 				m.messages = append(m.messages, formatErrorMessage("IRC client not initialized"))
 				m.viewport.SetContent(strings.Join(m.messages, "\n"))
@@ -373,6 +500,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else {
 						m.messages = append(m.messages, formatErrorMessage("Usage: /MSG <nick> <message>"))
 					}
+				case "LIST", "LS":
+
+					if args == "" {
+						m.ircClient.Raw("LIST")
+						m.messages = append(m.messages, formatSystemMessage("📋 Listing all channels"))
+					} else {
+						m.ircClient.Raw("LIST " + args)
+						m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("📋 Listing channels matching: %s", args)))
+					}
+				case "SWITCH", "SW":
+
+					if args != "" {
+						found := false
+						for _, ch := range m.config.Channels {
+							if strings.EqualFold(ch, args) || strings.EqualFold(ch, "#"+args) {
+								m.currentChannel = ch
+								found = true
+								break
+							}
+						}
+						if found {
+							m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("🔄 Switched to %s", m.currentChannel)))
+						} else {
+							m.messages = append(m.messages, formatErrorMessage(fmt.Sprintf("Channel %s not found in joined channels", args)))
+						}
+					} else {
+						channelList := strings.Join(m.config.Channels, ", ")
+						m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("📋 Available channels: %s", channelList)))
+					}
 				case "HELP":
 					helpText := []string{
 						"🆘 Available Commands:",
@@ -380,6 +536,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						"  /part [#channel] - Leave current or specified channel",
 						"  /nick <newnick> - Change nickname",
 						"  /msg <nick> <message> - Send private message",
+						"  /switch <channel> - Switch to a joined channel",
+						"  /list [pattern] - List channels",
 						"  /quit [message] - Quit IRC",
 						"  /help - Show this help",
 					}
@@ -387,7 +545,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.messages = append(m.messages, formatSystemMessage(line))
 					}
 				default:
-
 					log.Printf("Sending raw IRC command: %s %s", command, args)
 					if args != "" {
 						m.ircClient.Raw(command + " " + args)
@@ -397,14 +554,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("📡 Sent RAW: /%s %s", command, args)))
 				}
 			} else {
-
-				if m.currentChannel == "" {
-					m.currentChannel = ircChannel
+				if m.currentChannel == "" && len(m.config.Channels) > 0 {
+					m.currentChannel = m.config.Channels[0]
 				}
 				log.Printf("Sending PRIVMSG to %s: '%s' (from nick: %s)", m.currentChannel, inputValue, m.currentNick)
 
 				m.ircClient.Privmsg(m.currentChannel, inputValue)
-
 				m.messages = append(m.messages, formatUserMessageWithContext(m.currentNick, inputValue, m.currentNick))
 				log.Printf("Message added to local display: <%s> %s", m.currentNick, inputValue)
 			}
@@ -427,27 +582,36 @@ func (m model) View() string {
 	if !m.ready {
 		return systemMessageStyle.Render("🚀 Initializing IRC client...")
 	}
+
 	if m.err != nil {
 		return fmt.Sprintf("%s\n\n%s",
 			formatErrorMessage(fmt.Sprintf("Error: %v", m.err)),
 			helpStyle.Render("Press any key to quit."))
 	}
 
+	if m.state == stateSetup {
+		return m.renderSetupView()
+	}
+
 	var headerText string
 	if m.connected {
 		uptime := time.Since(m.connectionTime).Truncate(time.Second)
 		headerText = fmt.Sprintf("📡 IRC Client - %s @ %s (%s) - Connected for %v",
-			m.currentNick, m.currentChannel, ircServer, uptime)
+			m.currentNick, m.currentChannel, m.config.Server, uptime)
+	} else if m.state == stateConnecting {
+		headerText = fmt.Sprintf("📡 IRC Client - Connecting to %s...", m.config.Server)
 	} else {
-		headerText = "📡 IRC Client - Connecting..."
+		headerText = "📡 IRC Client - Disconnected"
 	}
 	header := headerStyle.Render(headerText)
 
 	var statusText string
 	if m.connected {
-		statusText = fmt.Sprintf("✅ Connected | Channel: %s | Users: Online", m.currentChannel)
-	} else {
+		statusText = fmt.Sprintf("✅ Connected | Channel: %s | Channels: %s", m.currentChannel, strings.Join(m.config.Channels, ", "))
+	} else if m.state == stateConnecting {
 		statusText = "🔄 Connecting to server..."
+	} else {
+		statusText = "❌ Disconnected"
 	}
 	status := statusStyle.Render(statusText)
 
@@ -457,17 +621,63 @@ func (m model) View() string {
 	textareaView := m.textarea.View()
 	input := inputBoxFocusedStyle.Render(textareaView)
 
-	help := helpStyle.Render("Commands: /help, /join #channel, /nick <name>, /quit | Ctrl+C to exit")
+	help := helpStyle.Render("Commands: /help, /join #channel, /switch <channel>, /nick <name>, /quit | Ctrl+C to exit")
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, status, chat, input, help)
 }
 
-func main() {
+func (m model) renderSetupView() string {
+	var content []string
 
+	content = append(content, headerStyle.Render("🚀 IRC Client Setup"))
+	content = append(content, "")
+
+	switch m.setupPhase {
+	case setupServer:
+		content = append(content, systemMessageStyle.Render("Step 1/4: Server Configuration"))
+		content = append(content, "")
+		content = append(content, fmt.Sprintf("Enter IRC server address (default: %s)", defaultServer))
+		content = append(content, helpStyle.Render("Format: server.com:port (e.g., irc.libera.chat:6697 for SSL, irc.libera.chat:6667 for non-SSL)"))
+
+	case setupNick:
+		content = append(content, systemMessageStyle.Render("Step 2/4: Nickname"))
+		content = append(content, "")
+		content = append(content, fmt.Sprintf("Server: %s (SSL: %v)", m.config.Server, m.config.UseSSL))
+		content = append(content, "")
+		content = append(content, fmt.Sprintf("Enter your nickname (default: %s)", defaultNick))
+
+	case setupChannels:
+		content = append(content, systemMessageStyle.Render("Step 3/4: Channels"))
+		content = append(content, "")
+		content = append(content, fmt.Sprintf("Server: %s (SSL: %v)", m.config.Server, m.config.UseSSL))
+		content = append(content, fmt.Sprintf("Nickname: %s", m.config.Nick))
+		content = append(content, "")
+		content = append(content, fmt.Sprintf("Enter channels to join (default: %s)", defaultChannel))
+		content = append(content, helpStyle.Render("Separate multiple channels with commas (e.g., #general,#random,#help)"))
+
+	case setupConfirm:
+		content = append(content, systemMessageStyle.Render("Step 4/4: Confirmation"))
+		content = append(content, "")
+		content = append(content, "📋 Configuration Summary:")
+		content = append(content, fmt.Sprintf("  Server: %s (SSL: %v)", m.config.Server, m.config.UseSSL))
+		content = append(content, fmt.Sprintf("  Nickname: %s", m.config.Nick))
+		content = append(content, fmt.Sprintf("  Channels: %s", strings.Join(m.config.Channels, ", ")))
+		content = append(content, "")
+		content = append(content, helpStyle.Render("Press Enter to connect, or type 'r' to restart setup"))
+	}
+
+	content = append(content, "")
+	content = append(content, inputBoxFocusedStyle.Render(m.textarea.View()))
+	content = append(content, "")
+	content = append(content, helpStyle.Render("Ctrl+C to exit"))
+
+	return strings.Join(content, "\n")
+}
+
+func main() {
 	logFile, err := tea.LogToFile("irc_debug.log", "debug")
 	if err != nil {
 		fmt.Println("could not create log file:", err)
-
 	}
 	defer logFile.Close()
 
