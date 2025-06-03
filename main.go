@@ -44,6 +44,13 @@ const (
 
 var p *tea.Program
 
+type channelData struct {
+	name     string
+	messages []string
+	active   bool
+	joined   bool
+}
+
 type model struct {
 	ircClient      *irc.Conn
 	viewport       viewport.Model
@@ -57,6 +64,11 @@ type model struct {
 	currentNick    string
 	width          int
 	height         int
+
+	// Enhanced channel management
+	channels       map[string]*channelData
+	channelOrder   []string
+	activeChannels []string
 
 	state            appState
 	setupPhase       setupPhase
@@ -74,7 +86,7 @@ type ircConfig struct {
 
 type (
 	ircMessageMsg      string
-	ircPrivmsgMsg      struct{ user, message string }
+	ircPrivmsgMsg      struct{ user, message, channel string }
 	ircErrorMsg        struct{ err error }
 	ircConnectedMsg    struct{}
 	ircDisconnectedMsg struct{}
@@ -113,6 +125,9 @@ func initialModel() model {
 		},
 		setupPrompt:      "",
 		autoJoinChannels: []string{},
+		channels:         make(map[string]*channelData),
+		channelOrder:     []string{},
+		activeChannels:   []string{},
 	}
 }
 
@@ -139,8 +154,10 @@ func (m *model) connectToIRC() tea.Cmd {
 			log.Println("Connected to IRC")
 			log.Printf("Our actual nickname is: %s", conn.Me().Nick)
 
+			// Initialize channels
 			for _, channel := range m.config.Channels {
 				if channel != "" {
+					m.addChannel(channel)
 					conn.Join(channel)
 				}
 			}
@@ -172,7 +189,7 @@ func (m *model) connectToIRC() tea.Cmd {
 			message := line.Args[1]
 			log.Printf("Received PRIVMSG: %s from %s in %s", message, user, channel)
 			if p != nil {
-				p.Send(ircPrivmsgMsg{user: user, message: message})
+				p.Send(ircPrivmsgMsg{user: user, message: message, channel: channel})
 			}
 		})
 
@@ -362,8 +379,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		channelList := strings.Join(m.config.Channels, ", ")
-		m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("✅ Connected to %s", m.config.Server)))
-		m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("📋 Joined channels: %s", channelList)))
+		systemMsg1 := formatSystemMessage(fmt.Sprintf("✅ Connected to %s", m.config.Server))
+		systemMsg2 := formatSystemMessage(fmt.Sprintf("📋 Joining channels: %s", channelList))
+
+		// Add to global messages and current channel
+		m.messages = append(m.messages, systemMsg1, systemMsg2)
+		if m.currentChannel != "" {
+			m.addMessageToChannel(m.currentChannel, systemMsg1)
+			m.addMessageToChannel(m.currentChannel, systemMsg2)
+		}
+
 		m.viewport.SetContent(strings.Join(m.messages, "\n"))
 		m.viewport.GotoBottom()
 
@@ -381,9 +406,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ircPrivmsgMsg:
 		formattedMsg := formatUserMessageWithContext(msg.user, msg.message, m.currentNick)
-		m.messages = append(m.messages, formattedMsg)
-		m.viewport.SetContent(strings.Join(m.messages, "\n"))
-		m.viewport.GotoBottom()
+
+		// Add message to the channel it was sent to
+		if msg.channel != "" {
+			m.addMessageToChannel(msg.channel, formattedMsg)
+
+			// If this is the current channel, also add to main messages and update display
+			if msg.channel == m.currentChannel {
+				m.messages = append(m.messages, formattedMsg)
+				m.viewport.SetContent(strings.Join(m.messages, "\n"))
+				m.viewport.GotoBottom()
+			}
+		} else {
+			// Private message, add to current display
+			m.messages = append(m.messages, formattedMsg)
+			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+			m.viewport.GotoBottom()
+		}
 
 	case ircErrorMsg:
 		m.err = msg.err
@@ -403,15 +442,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 
 	case ircJoinMsg:
-		if msg.user == m.currentNick || msg.user == m.config.Nick || strings.HasPrefix(msg.user, m.config.Nick) {
-			m.currentChannel = msg.channel
-			m.currentNick = msg.user
-			log.Printf("Updated current channel to: %s and nick to: %s", msg.channel, msg.user)
+		joinMsg := formatJoinMessage(msg.user, msg.channel)
+
+		// Add join message to the specific channel
+		m.addMessageToChannel(msg.channel, joinMsg)
+
+		// If it's us joining, mark channel as joined and switch to it
+		log.Printf("Processing join message: %s joined %s (our nick: %s)", msg.user, msg.channel, m.currentNick)
+		if msg.user == m.currentNick || strings.EqualFold(msg.user, m.currentNick) {
+			log.Printf("We joined channel: %s, marking as joined", msg.channel)
+			m.addChannel(msg.channel)
+			m.setChannelJoined(msg.channel, true)
+
+			// If this is our first channel or we don't have a current channel, switch to it
+			if m.currentChannel == "" || len(m.activeChannels) == 0 {
+				log.Printf("Switching to channel: %s", msg.channel)
+				m.switchToChannel(msg.channel)
+			}
 		}
 
-		m.messages = append(m.messages, formatJoinMessage(msg.user, msg.channel))
-		m.viewport.SetContent(strings.Join(m.messages, "\n"))
-		m.viewport.GotoBottom()
+		// If this is the current channel, also add to main messages and update display
+		if msg.channel == m.currentChannel {
+			m.messages = append(m.messages, joinMsg)
+			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+			m.viewport.GotoBottom()
+		}
 
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -420,6 +475,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ircClient.Quit("Bubble Tea client closing")
 			}
 			return m, tea.Quit
+		case tea.KeyTab:
+			// Switch to next channel
+			m.nextChannel()
+			return m, nil
+		case tea.KeyShiftTab:
+			// Switch to previous channel
+			m.prevChannel()
+			return m, nil
 		case tea.KeyEnter:
 			if m.ircClient == nil {
 				m.messages = append(m.messages, formatErrorMessage("IRC client not initialized"))
@@ -460,9 +523,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "JOIN":
 					if args != "" {
 						log.Printf("Joining channel: %s", args)
+						m.addChannel(args)
 						m.ircClient.Join(args)
-						m.currentChannel = args
-						m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("🚪 Joining %s...", args)))
+						systemMsg := formatSystemMessage(fmt.Sprintf("🚪 Joining %s...", args))
+						m.messages = append(m.messages, systemMsg)
+						if m.currentChannel != "" {
+							m.addMessageToChannel(m.currentChannel, systemMsg)
+						}
 					} else {
 						m.messages = append(m.messages, formatErrorMessage("Usage: /JOIN #channel"))
 					}
@@ -473,7 +540,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					log.Printf("Leaving channel: %s", channelToPart)
 					m.ircClient.Part(channelToPart)
-					m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("🚪 Leaving %s...", channelToPart)))
+					systemMsg := formatSystemMessage(fmt.Sprintf("🚪 Leaving %s...", channelToPart))
+					m.messages = append(m.messages, systemMsg)
+
+					// Mark channel as not joined
+					m.setChannelJoined(channelToPart, false)
+
+					// If leaving current channel, switch to another one
+					if channelToPart == m.currentChannel && len(m.activeChannels) > 1 {
+						m.nextChannel()
+					}
 				case "NICK":
 					if args != "" {
 						log.Printf("Changing nick to: %s", args)
@@ -510,24 +586,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("📋 Listing channels matching: %s", args)))
 					}
 				case "SWITCH", "SW":
-
 					if args != "" {
-						found := false
-						for _, ch := range m.config.Channels {
-							if strings.EqualFold(ch, args) || strings.EqualFold(ch, "#"+args) {
-								m.currentChannel = ch
-								found = true
+						// Normalize channel name
+						channelName := args
+						if !strings.HasPrefix(channelName, "#") {
+							channelName = "#" + channelName
+						}
+
+						// Check if channel exists and is joined (case-insensitive)
+						var foundChannel string
+						var foundChannelData *channelData
+						for chName, chData := range m.channels {
+							if strings.EqualFold(chName, channelName) && chData.joined {
+								foundChannel = chName
+								foundChannelData = chData
 								break
 							}
 						}
-						if found {
-							m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("🔄 Switched to %s", m.currentChannel)))
+
+						if foundChannelData != nil {
+							m.switchToChannel(foundChannel)
+							m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("🔄 Switched to %s", foundChannel)))
 						} else {
-							m.messages = append(m.messages, formatErrorMessage(fmt.Sprintf("Channel %s not found in joined channels", args)))
+							// Debug: show all available channels
+							log.Printf("Switch failed. Available channels:")
+							for chName, chData := range m.channels {
+								log.Printf("  %s (joined: %v)", chName, chData.joined)
+							}
+							m.messages = append(m.messages, formatErrorMessage(fmt.Sprintf("Channel %s not found in joined channels", channelName)))
 						}
 					} else {
-						channelList := strings.Join(m.config.Channels, ", ")
-						m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("📋 Available channels: %s", channelList)))
+						channelsList := m.getChannelsList()
+						if len(channelsList) > 0 {
+							m.messages = append(m.messages, formatSystemMessage("📋 Available channels:"))
+							for _, ch := range channelsList {
+								m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("  %s", ch)))
+							}
+						} else {
+							m.messages = append(m.messages, formatSystemMessage("📋 No channels joined"))
+						}
 					}
 				case "HELP":
 					helpText := []string{
@@ -540,6 +637,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						"  /list [pattern] - List channels",
 						"  /quit [message] - Quit IRC",
 						"  /help - Show this help",
+						"",
+						"🎮 Keyboard Shortcuts:",
+						"  Tab - Switch to next channel",
+						"  Shift+Tab - Switch to previous channel",
+						"  Ctrl+C - Quit IRC client",
 					}
 					for _, line := range helpText {
 						m.messages = append(m.messages, formatSystemMessage(line))
@@ -554,13 +656,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("📡 Sent RAW: /%s %s", command, args)))
 				}
 			} else {
-				if m.currentChannel == "" && len(m.config.Channels) > 0 {
-					m.currentChannel = m.config.Channels[0]
+				if m.currentChannel == "" && len(m.activeChannels) > 0 {
+					m.currentChannel = m.activeChannels[0]
 				}
 				log.Printf("Sending PRIVMSG to %s: '%s' (from nick: %s)", m.currentChannel, inputValue, m.currentNick)
 
 				m.ircClient.Privmsg(m.currentChannel, inputValue)
-				m.messages = append(m.messages, formatUserMessageWithContext(m.currentNick, inputValue, m.currentNick))
+
+				// Add to current channel's message history and display
+				formattedMsg := formatUserMessageWithContext(m.currentNick, inputValue, m.currentNick)
+				m.messages = append(m.messages, formattedMsg)
+				m.addMessageToChannel(m.currentChannel, formattedMsg)
 				log.Printf("Message added to local display: <%s> %s", m.currentNick, inputValue)
 			}
 
@@ -607,7 +713,11 @@ func (m model) View() string {
 
 	var statusText string
 	if m.connected {
-		statusText = fmt.Sprintf("✅ Connected | Channel: %s | Channels: %s", m.currentChannel, strings.Join(m.config.Channels, ", "))
+		activeChannelsList := strings.Join(m.activeChannels, ", ")
+		if activeChannelsList == "" {
+			activeChannelsList = "none"
+		}
+		statusText = fmt.Sprintf("✅ Connected | Current: %s | Active: [%s] | Tab/Shift+Tab to switch", m.currentChannel, activeChannelsList)
 	} else if m.state == stateConnecting {
 		statusText = "🔄 Connecting to server..."
 	} else {
@@ -621,7 +731,7 @@ func (m model) View() string {
 	textareaView := m.textarea.View()
 	input := inputBoxFocusedStyle.Render(textareaView)
 
-	help := helpStyle.Render("Commands: /help, /join #channel, /switch <channel>, /nick <name>, /quit | Ctrl+C to exit")
+	help := helpStyle.Render("Commands: /help, /join #channel, /switch <channel>, /nick <name>, /quit | Tab/Shift+Tab: switch channels | Ctrl+C: exit")
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, status, chat, input, help)
 }
@@ -672,6 +782,139 @@ func (m model) renderSetupView() string {
 	content = append(content, helpStyle.Render("Ctrl+C to exit"))
 
 	return strings.Join(content, "\n")
+}
+
+// Channel management helper functions
+func (m *model) addChannel(channelName string) {
+	log.Printf("Adding channel: %s", channelName)
+	if _, exists := m.channels[channelName]; !exists {
+		m.channels[channelName] = &channelData{
+			name:     channelName,
+			messages: []string{},
+			active:   false,
+			joined:   false,
+		}
+		m.channelOrder = append(m.channelOrder, channelName)
+		log.Printf("Channel %s added successfully", channelName)
+	} else {
+		log.Printf("Channel %s already exists", channelName)
+	}
+}
+
+func (m *model) setChannelActive(channelName string, active bool) {
+	if channel, exists := m.channels[channelName]; exists {
+		channel.active = active
+		if active && !m.isChannelInActiveList(channelName) {
+			m.activeChannels = append(m.activeChannels, channelName)
+		} else if !active {
+			for i, ch := range m.activeChannels {
+				if ch == channelName {
+					m.activeChannels = append(m.activeChannels[:i], m.activeChannels[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+}
+
+func (m *model) setChannelJoined(channelName string, joined bool) {
+	log.Printf("Setting channel %s joined status to: %v", channelName, joined)
+	if channel, exists := m.channels[channelName]; exists {
+		channel.joined = joined
+		log.Printf("Channel %s joined status updated successfully", channelName)
+	} else {
+		log.Printf("Channel %s not found when trying to set joined status", channelName)
+	}
+}
+
+func (m *model) isChannelInActiveList(channelName string) bool {
+	for _, ch := range m.activeChannels {
+		if ch == channelName {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *model) addMessageToChannel(channelName, message string) {
+	if channel, exists := m.channels[channelName]; exists {
+		channel.messages = append(channel.messages, message)
+	}
+}
+
+func (m *model) switchToChannel(channelName string) {
+	log.Printf("Attempting to switch to channel: %s", channelName)
+	if channel, exists := m.channels[channelName]; exists {
+		log.Printf("Channel %s exists, joined: %v", channelName, channel.joined)
+		if channel.joined {
+			// Set previous channel as inactive
+			if m.currentChannel != "" {
+				m.setChannelActive(m.currentChannel, false)
+			}
+
+			// Set new channel as active
+			m.currentChannel = channelName
+			m.setChannelActive(channelName, true)
+
+			// Update viewport with channel-specific messages
+			m.messages = channel.messages
+			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+			m.viewport.GotoBottom()
+			log.Printf("Successfully switched to channel: %s", channelName)
+		} else {
+			log.Printf("Channel %s not joined yet", channelName)
+		}
+	} else {
+		log.Printf("Channel %s does not exist in channels map", channelName)
+	}
+}
+
+func (m *model) getChannelsList() []string {
+	var result []string
+	for _, channelName := range m.channelOrder {
+		if channel, exists := m.channels[channelName]; exists && channel.joined {
+			status := ""
+			if channel.active {
+				status = " [ACTIVE]"
+			}
+			result = append(result, channelName+status)
+		}
+	}
+	return result
+}
+
+func (m *model) nextChannel() {
+	if len(m.activeChannels) <= 1 {
+		return
+	}
+
+	currentIndex := -1
+	for i, ch := range m.activeChannels {
+		if ch == m.currentChannel {
+			currentIndex = i
+			break
+		}
+	}
+
+	nextIndex := (currentIndex + 1) % len(m.activeChannels)
+	m.switchToChannel(m.activeChannels[nextIndex])
+}
+
+func (m *model) prevChannel() {
+	if len(m.activeChannels) <= 1 {
+		return
+	}
+
+	currentIndex := -1
+	for i, ch := range m.activeChannels {
+		if ch == m.currentChannel {
+			currentIndex = i
+			break
+		}
+	}
+
+	prevIndex := (currentIndex - 1 + len(m.activeChannels)) % len(m.activeChannels)
+	m.switchToChannel(m.activeChannels[prevIndex])
 }
 
 func main() {
