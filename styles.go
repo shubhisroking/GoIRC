@@ -93,12 +93,79 @@ var (
 			Foreground(textMuted).
 			Italic(true).
 			Align(lipgloss.Center)
+
+	sidebarStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#0F1419")).
+			Border(lipgloss.NormalBorder(), false, true, false, false).
+			BorderForeground(lipgloss.Color("#2D3748")).
+			Padding(1).
+			Width(30).
+			Height(20)
+
+	sidebarHeaderStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("#553C9A")).
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Bold(true).
+				Align(lipgloss.Center).
+				Padding(0, 1).
+				Margin(0, 0, 1, 0).
+				Width(26).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#7C3AED"))
+
+	sidebarItemStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#A0AEC0")).
+				Padding(0, 1).
+				Margin(0, 0, 0, 0)
+
+	sidebarActiveItemStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Background(lipgloss.Color("#553C9A")).
+				Bold(true).
+				Padding(0, 1).
+				Margin(0, 0, 0, 0).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#7C3AED"))
+
+	sidebarSectionStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FBD38D")).
+				Bold(true).
+				Padding(0, 1).
+				Margin(0, 0, 0, 0).
+				Background(lipgloss.Color("#2D3748")).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#4A5568"))
+
+	sidebarChannelCountStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#68D391")).
+					Bold(true).
+					Background(lipgloss.Color("#1A202C")).
+					Padding(0, 1).
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color("#2D3748"))
+
+	sidebarStatusDotStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#68D391")).
+				Bold(true)
+
+	sidebarDisconnectedDotStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#F56565")).
+					Bold(true)
+
+	sidebarDividerStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#4A5568")).
+				Margin(0, 0, 0, 0)
 )
 
 func UpdateStyleWidths(width int) {
+	sidebarWidth := 30
+	chatWidth := width - sidebarWidth - 4 // Account for sidebar width and borders
+
 	headerStyle = headerStyle.Width(width)
 	statusStyle = statusStyle.Width(width)
-	inputBoxStyle = inputBoxStyle.Width(width - 4)
-	inputBoxFocusedStyle = inputBoxFocusedStyle.Width(width - 4)
-	chatAreaStyle = chatAreaStyle.Width(width - 4)
+	inputBoxStyle = inputBoxStyle.Width(chatWidth)
+	inputBoxFocusedStyle = inputBoxFocusedStyle.Width(chatWidth)
+	chatAreaStyle = chatAreaStyle.Width(chatWidth)
+	sidebarStyle = sidebarStyle.Width(sidebarWidth)
+	sidebarHeaderStyle = sidebarHeaderStyle.Width(sidebarWidth - 4)
 }

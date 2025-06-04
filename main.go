@@ -65,10 +65,14 @@ type model struct {
 	width          int
 	height         int
 
-	// Enhanced channel management
+	
 	channels       map[string]*channelData
 	channelOrder   []string
 	activeChannels []string
+
+	
+	showSidebar  bool
+	sidebarWidth int
 
 	state            appState
 	setupPhase       setupPhase
@@ -128,6 +132,8 @@ func initialModel() model {
 		channels:         make(map[string]*channelData),
 		channelOrder:     []string{},
 		activeChannels:   []string{},
+		showSidebar:      true,
+		sidebarWidth:     30,
 	}
 }
 
@@ -154,7 +160,7 @@ func (m *model) connectToIRC() tea.Cmd {
 			log.Println("Connected to IRC")
 			log.Printf("Our actual nickname is: %s", conn.Me().Nick)
 
-			// Initialize channels
+			
 			for _, channel := range m.config.Channels {
 				if channel != "" {
 					m.addChannel(channel)
@@ -327,10 +333,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		m.viewport.Width = max(msg.Width-4, minWidth-4)
+		sidebarWidth := 0
+		if m.showSidebar {
+			sidebarWidth = m.sidebarWidth + 2 
+		}
+
+		chatWidth := max(msg.Width-sidebarWidth-4, minWidth-4)
+		m.viewport.Width = chatWidth
 		m.viewport.Height = max(msg.Height-headerHeight-footerHeight-statusHeight-2, 10)
 
-		m.textarea.SetWidth(max(msg.Width-4, minWidth-4))
+		m.textarea.SetWidth(chatWidth)
 
 		UpdateStyleWidths(msg.Width)
 
@@ -382,7 +394,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		systemMsg1 := formatSystemMessage(fmt.Sprintf("✅ Connected to %s", m.config.Server))
 		systemMsg2 := formatSystemMessage(fmt.Sprintf("📋 Joining channels: %s", channelList))
 
-		// Add to global messages and current channel
+		
 		m.messages = append(m.messages, systemMsg1, systemMsg2)
 		if m.currentChannel != "" {
 			m.addMessageToChannel(m.currentChannel, systemMsg1)
@@ -407,18 +419,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ircPrivmsgMsg:
 		formattedMsg := formatUserMessageWithContext(msg.user, msg.message, m.currentNick)
 
-		// Add message to the channel it was sent to
+		
 		if msg.channel != "" {
 			m.addMessageToChannel(msg.channel, formattedMsg)
 
-			// If this is the current channel, also add to main messages and update display
+			
 			if msg.channel == m.currentChannel {
 				m.messages = append(m.messages, formattedMsg)
 				m.viewport.SetContent(strings.Join(m.messages, "\n"))
 				m.viewport.GotoBottom()
 			}
 		} else {
-			// Private message, add to current display
+			
 			m.messages = append(m.messages, formattedMsg)
 			m.viewport.SetContent(strings.Join(m.messages, "\n"))
 			m.viewport.GotoBottom()
@@ -444,24 +456,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ircJoinMsg:
 		joinMsg := formatJoinMessage(msg.user, msg.channel)
 
-		// Add join message to the specific channel
+		
 		m.addMessageToChannel(msg.channel, joinMsg)
 
-		// If it's us joining, mark channel as joined and switch to it
-		log.Printf("Processing join message: %s joined %s (our nick: %s)", msg.user, msg.channel, m.currentNick)
-		if msg.user == m.currentNick || strings.EqualFold(msg.user, m.currentNick) {
+		
+		ourNick := m.currentNick
+		if m.ircClient != nil && m.ircClient.Connected() {
+			ourNick = m.ircClient.Me().Nick
+			if ourNick != m.currentNick {
+				m.currentNick = ourNick
+				log.Printf("Updated our nick to: %s", ourNick)
+			}
+		}
+
+		
+		log.Printf("Processing join message: %s joined %s (our nick: %s)", msg.user, msg.channel, ourNick)
+		if strings.EqualFold(msg.user, ourNick) {
 			log.Printf("We joined channel: %s, marking as joined", msg.channel)
 			m.addChannel(msg.channel)
 			m.setChannelJoined(msg.channel, true)
 
-			// If this is our first channel or we don't have a current channel, switch to it
-			if m.currentChannel == "" || len(m.activeChannels) == 0 {
+			
+			joinedChannels := m.getJoinedChannels()
+			if m.currentChannel == "" || len(joinedChannels) == 1 {
 				log.Printf("Switching to channel: %s", msg.channel)
 				m.switchToChannel(msg.channel)
 			}
 		}
 
-		// If this is the current channel, also add to main messages and update display
+		
 		if msg.channel == m.currentChannel {
 			m.messages = append(m.messages, joinMsg)
 			m.viewport.SetContent(strings.Join(m.messages, "\n"))
@@ -476,12 +499,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case tea.KeyTab:
-			// Switch to next channel
+			
 			m.nextChannel()
 			return m, nil
 		case tea.KeyShiftTab:
-			// Switch to previous channel
+			
 			m.prevChannel()
+			return m, nil
+		case tea.KeyF1:
+			
+			m.showSidebar = !m.showSidebar
+
+			
+			sidebarWidth := 0
+			if m.showSidebar {
+				sidebarWidth = m.sidebarWidth + 2
+			}
+			chatWidth := max(m.width-sidebarWidth-4, minWidth-4)
+			m.viewport.Width = chatWidth
+			m.textarea.SetWidth(chatWidth)
+			UpdateStyleWidths(m.width)
+
+			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+			m.viewport.GotoBottom()
 			return m, nil
 		case tea.KeyEnter:
 			if m.ircClient == nil {
@@ -543,12 +583,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					systemMsg := formatSystemMessage(fmt.Sprintf("🚪 Leaving %s...", channelToPart))
 					m.messages = append(m.messages, systemMsg)
 
-					// Mark channel as not joined
+					
 					m.setChannelJoined(channelToPart, false)
 
-					// If leaving current channel, switch to another one
-					if channelToPart == m.currentChannel && len(m.activeChannels) > 1 {
+					
+					joinedChannels := m.getJoinedChannels()
+					if channelToPart == m.currentChannel && len(joinedChannels) > 0 {
 						m.nextChannel()
+					} else if len(joinedChannels) == 0 {
+						m.currentChannel = ""
+						m.messages = []string{}
+						m.viewport.SetContent("")
 					}
 				case "NICK":
 					if args != "" {
@@ -587,13 +632,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				case "SWITCH", "SW":
 					if args != "" {
-						// Normalize channel name
+						
 						channelName := args
 						if !strings.HasPrefix(channelName, "#") {
 							channelName = "#" + channelName
 						}
 
-						// Check if channel exists and is joined (case-insensitive)
+						
 						var foundChannel string
 						var foundChannelData *channelData
 						for chName, chData := range m.channels {
@@ -608,7 +653,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.switchToChannel(foundChannel)
 							m.messages = append(m.messages, formatSystemMessage(fmt.Sprintf("🔄 Switched to %s", foundChannel)))
 						} else {
-							// Debug: show all available channels
+							
 							log.Printf("Switch failed. Available channels:")
 							for chName, chData := range m.channels {
 								log.Printf("  %s (joined: %v)", chName, chData.joined)
@@ -639,8 +684,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						"  /help - Show this help",
 						"",
 						"🎮 Keyboard Shortcuts:",
+						"  F1 - Toggle sidebar",
 						"  Tab - Switch to next channel",
 						"  Shift+Tab - Switch to previous channel",
+						"  Alt+1-9 - Jump to channel number (shown in sidebar)",
 						"  Ctrl+C - Quit IRC client",
 					}
 					for _, line := range helpText {
@@ -663,7 +710,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				m.ircClient.Privmsg(m.currentChannel, inputValue)
 
-				// Add to current channel's message history and display
+				
 				formattedMsg := formatUserMessageWithContext(m.currentNick, inputValue, m.currentNick)
 				m.messages = append(m.messages, formattedMsg)
 				m.addMessageToChannel(m.currentChannel, formattedMsg)
@@ -675,6 +722,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.Reset()
 
 			return m, nil
+		}
+
+		
+		if msg.Alt && len(msg.Runes) > 0 {
+			switch msg.Runes[0] {
+			case '1', '2', '3', '4', '5', '6', '7', '8', '9':
+				channelNum := int(msg.Runes[0] - '1') 
+				joinedChannels := m.getJoinedChannels()
+				if channelNum < len(joinedChannels) {
+					m.switchToChannel(joinedChannels[channelNum])
+				}
+				return m, nil
+			}
 		}
 	}
 
@@ -702,26 +762,27 @@ func (m model) View() string {
 	var headerText string
 	if m.connected {
 		uptime := time.Since(m.connectionTime).Truncate(time.Second)
-		headerText = fmt.Sprintf("📡 IRC Client - %s @ %s (%s) - Connected for %v",
+		headerText = fmt.Sprintf("IRC Client - %s @ %s (%s) - Connected for %v",
 			m.currentNick, m.currentChannel, m.config.Server, uptime)
 	} else if m.state == stateConnecting {
-		headerText = fmt.Sprintf("📡 IRC Client - Connecting to %s...", m.config.Server)
+		headerText = fmt.Sprintf("IRC Client - Connecting to %s...", m.config.Server)
 	} else {
-		headerText = "📡 IRC Client - Disconnected"
+		headerText = "IRC Client - Disconnected"
 	}
 	header := headerStyle.Render(headerText)
 
 	var statusText string
 	if m.connected {
-		activeChannelsList := strings.Join(m.activeChannels, ", ")
-		if activeChannelsList == "" {
-			activeChannelsList = "none"
+		joinedChannels := m.getJoinedChannels()
+		joinedChannelsList := strings.Join(joinedChannels, ", ")
+		if joinedChannelsList == "" {
+			joinedChannelsList = "none"
 		}
-		statusText = fmt.Sprintf("✅ Connected | Current: %s | Active: [%s] | Tab/Shift+Tab to switch", m.currentChannel, activeChannelsList)
+		statusText = fmt.Sprintf("Connected | Current: %s | Joined: [%s] | Tab/Shift+Tab/Alt+1-9 to switch", m.currentChannel, joinedChannelsList)
 	} else if m.state == stateConnecting {
-		statusText = "🔄 Connecting to server..."
+		statusText = "Connecting to server..."
 	} else {
-		statusText = "❌ Disconnected"
+		statusText = "Disconnected"
 	}
 	status := statusStyle.Render(statusText)
 
@@ -731,15 +792,30 @@ func (m model) View() string {
 	textareaView := m.textarea.View()
 	input := inputBoxFocusedStyle.Render(textareaView)
 
-	help := helpStyle.Render("Commands: /help, /join #channel, /switch <channel>, /nick <name>, /quit | Tab/Shift+Tab: switch channels | Ctrl+C: exit")
+	var help string
+	if m.showSidebar {
+		help = helpStyle.Render("Commands: /help, /join #channel, /switch <channel> | F1: toggle sidebar | Tab/Shift+Tab/Alt+1-9: switch channels | Ctrl+C: exit")
+	} else {
+		help = helpStyle.Render("Commands: /help, /join #channel, /switch <channel>, /nick <name>, /quit | F1: show sidebar | Tab/Shift+Tab/Alt+1-9: switch channels | Ctrl+C: exit")
+	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, status, chat, input, help)
+	
+	if m.showSidebar {
+		sidebar := m.renderSidebar()
+		mainContent := lipgloss.JoinVertical(lipgloss.Left, chat, input, help)
+		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainContent)
+		return lipgloss.JoinVertical(lipgloss.Left, header, status, contentArea)
+	}
+
+	
+	mainContent := lipgloss.JoinVertical(lipgloss.Left, chat, input, help)
+	return lipgloss.JoinVertical(lipgloss.Left, header, status, mainContent)
 }
 
 func (m model) renderSetupView() string {
 	var content []string
 
-	content = append(content, headerStyle.Render("🚀 IRC Client Setup"))
+	content = append(content, headerStyle.Render("IRC Client Setup"))
 	content = append(content, "")
 
 	switch m.setupPhase {
@@ -768,7 +844,7 @@ func (m model) renderSetupView() string {
 	case setupConfirm:
 		content = append(content, systemMessageStyle.Render("Step 4/4: Confirmation"))
 		content = append(content, "")
-		content = append(content, "📋 Configuration Summary:")
+		content = append(content, "Configuration Summary:")
 		content = append(content, fmt.Sprintf("  Server: %s (SSL: %v)", m.config.Server, m.config.UseSSL))
 		content = append(content, fmt.Sprintf("  Nickname: %s", m.config.Nick))
 		content = append(content, fmt.Sprintf("  Channels: %s", strings.Join(m.config.Channels, ", ")))
@@ -784,7 +860,84 @@ func (m model) renderSetupView() string {
 	return strings.Join(content, "\n")
 }
 
-// Channel management helper functions
+func (m model) renderSidebar() string {
+	if !m.showSidebar {
+		return ""
+	}
+
+	var content []string
+	sidebarHeight := m.height - headerHeight - footerHeight - statusHeight - 2
+	
+	
+	content = append(content, sidebarHeaderStyle.Render("IRC CLIENT"))
+	content = append(content, "")
+	
+	
+	statusText := ""
+	if m.connected {
+		statusIcon := sidebarStatusDotStyle.Render("●")
+		statusText = fmt.Sprintf("%s CONNECTED", statusIcon)
+	} else {
+		statusIcon := sidebarDisconnectedDotStyle.Render("●")
+		statusText = fmt.Sprintf("%s DISCONNECTED", statusIcon)
+	}
+	content = append(content, sidebarSectionStyle.Render(statusText))
+	content = append(content, "")
+	
+	
+	if m.connected && m.currentNick != "" {
+		content = append(content, sidebarItemStyle.Render(fmt.Sprintf("User: %s", m.currentNick)))
+		serverName := strings.Split(m.config.Server, ":")[0]
+		if len(serverName) > 18 {
+			serverName = serverName[:15] + "..."
+		}
+		content = append(content, sidebarItemStyle.Render(fmt.Sprintf("Server: %s", serverName)))
+		content = append(content, "")
+	}
+	
+	
+	joinedChannels := m.getJoinedChannels()
+	channelCountBadge := sidebarChannelCountStyle.Render(fmt.Sprintf(" %d ", len(joinedChannels)))
+	channelsHeader := fmt.Sprintf("CHANNELS %s", channelCountBadge)
+	content = append(content, sidebarSectionStyle.Render(channelsHeader))
+	
+	if len(joinedChannels) > 0 {
+		for i, channelName := range joinedChannels {
+			
+			displayName := channelName
+			if len(displayName) > 20 {
+				displayName = displayName[:17] + "..."
+			}
+			
+			channelLine := fmt.Sprintf("%d %s", i+1, displayName)
+			
+			if channelName == m.currentChannel {
+				content = append(content, sidebarActiveItemStyle.Render(fmt.Sprintf("> %s", channelLine)))
+			} else {
+				content = append(content, sidebarItemStyle.Render(fmt.Sprintf("  %s", channelLine)))
+			}
+		}
+	} else {
+		content = append(content, sidebarItemStyle.Render("  No channels joined"))
+	}
+	
+	
+	maxLines := sidebarHeight - 2
+	if len(content) < maxLines {
+		for len(content) < maxLines {
+			content = append(content, "")
+		}
+	} else if len(content) > maxLines {
+		
+		content = content[:maxLines-1]
+		content = append(content, sidebarItemStyle.Render("..."))
+	}
+	
+	sidebarContent := strings.Join(content, "\n")
+	return sidebarStyle.Height(sidebarHeight).Render(sidebarContent)
+}
+
+
 func (m *model) addChannel(channelName string) {
 	log.Printf("Adding channel: %s", channelName)
 	if _, exists := m.channels[channelName]; !exists {
@@ -847,16 +1000,16 @@ func (m *model) switchToChannel(channelName string) {
 	if channel, exists := m.channels[channelName]; exists {
 		log.Printf("Channel %s exists, joined: %v", channelName, channel.joined)
 		if channel.joined {
-			// Set previous channel as inactive
+			
 			if m.currentChannel != "" {
 				m.setChannelActive(m.currentChannel, false)
 			}
 
-			// Set new channel as active
+			
 			m.currentChannel = channelName
 			m.setChannelActive(channelName, true)
 
-			// Update viewport with channel-specific messages
+			
 			m.messages = channel.messages
 			m.viewport.SetContent(strings.Join(m.messages, "\n"))
 			m.viewport.GotoBottom()
@@ -883,38 +1036,62 @@ func (m *model) getChannelsList() []string {
 	return result
 }
 
+func (m *model) getJoinedChannels() []string {
+	var joined []string
+	for _, channelName := range m.channelOrder {
+		if channel, exists := m.channels[channelName]; exists && channel.joined {
+			joined = append(joined, channelName)
+		}
+	}
+	return joined
+}
+
 func (m *model) nextChannel() {
-	if len(m.activeChannels) <= 1 {
+	joinedChannels := m.getJoinedChannels()
+	if len(joinedChannels) <= 1 {
 		return
 	}
 
 	currentIndex := -1
-	for i, ch := range m.activeChannels {
+	for i, ch := range joinedChannels {
 		if ch == m.currentChannel {
 			currentIndex = i
 			break
 		}
 	}
 
-	nextIndex := (currentIndex + 1) % len(m.activeChannels)
-	m.switchToChannel(m.activeChannels[nextIndex])
+	if currentIndex == -1 && len(joinedChannels) > 0 {
+		
+		m.switchToChannel(joinedChannels[0])
+		return
+	}
+
+	nextIndex := (currentIndex + 1) % len(joinedChannels)
+	m.switchToChannel(joinedChannels[nextIndex])
 }
 
 func (m *model) prevChannel() {
-	if len(m.activeChannels) <= 1 {
+	joinedChannels := m.getJoinedChannels()
+	if len(joinedChannels) <= 1 {
 		return
 	}
 
 	currentIndex := -1
-	for i, ch := range m.activeChannels {
+	for i, ch := range joinedChannels {
 		if ch == m.currentChannel {
 			currentIndex = i
 			break
 		}
 	}
 
-	prevIndex := (currentIndex - 1 + len(m.activeChannels)) % len(m.activeChannels)
-	m.switchToChannel(m.activeChannels[prevIndex])
+	if currentIndex == -1 && len(joinedChannels) > 0 {
+		
+		m.switchToChannel(joinedChannels[0])
+		return
+	}
+
+	prevIndex := (currentIndex - 1 + len(joinedChannels)) % len(joinedChannels)
+	m.switchToChannel(joinedChannels[prevIndex])
 }
 
 func main() {
