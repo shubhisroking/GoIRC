@@ -69,3 +69,8 @@ func formatErrorMessage(message string) string {
 	timestamp := formatTimestamp()
 	return formatMessage(timestamp, errorMessageStyle.Render(fmt.Sprintf("⚠ %s", message)))
 }
+
+func formatChannelSwitchMessage(message string) string {
+	timestamp := formatTimestamp()
+	return formatMessage(timestamp, channelSwitchStyle.Render(message))
+}

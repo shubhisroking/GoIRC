@@ -67,9 +67,18 @@ var (
 				Foreground(errorColor).
 				Bold(true)
 
+	channelSwitchStyle = lipgloss.NewStyle().
+				Foreground(accentColor).
+				Bold(true).
+				Italic(true)
+
 	timestampStyle = lipgloss.NewStyle().
 			Foreground(textMuted).
 			Faint(true)
+
+	urlTitleStyle = lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Italic(true)
 
 	inputBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).

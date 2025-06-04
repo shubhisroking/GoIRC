@@ -58,9 +58,9 @@ func (m model) View() string {
 
 	var help string
 	if m.showSidebar {
-		help = helpStyle.Render("Commands: /help, /join #channel, /switch <channel> | F1: toggle sidebar | Tab/Shift+Tab/Alt+1-9: switch channels | Ctrl+C: exit")
+		help = helpStyle.Render("Commands: /help, /join #channel | Tab: next channel | Shift+Tab: prev channel | Ctrl+B: toggle sidebar | Ctrl+C: exit")
 	} else {
-		help = helpStyle.Render("Commands: /help, /join #channel, /switch <channel>, /nick <name>, /quit | F1: show sidebar | Tab/Shift+Tab/Alt+1-9: switch channels | Ctrl+C: exit")
+		help = helpStyle.Render("Commands: /help, /join #channel, /nick <name>, /quit | Tab: next channel | Shift+Tab: prev channel | Ctrl+B: show sidebar | Ctrl+C: exit")
 	}
 
 	// Layout with sidebar

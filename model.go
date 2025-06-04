@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -211,6 +212,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case tea.KeyTab:
+			m.nextChannel()
+
+		case tea.KeyShiftTab:
+			m.prevChannel()
+
+		case tea.KeyCtrlB:
 			m.showSidebar = !m.showSidebar
 			m.updateDimensions()
 
@@ -276,6 +283,27 @@ func (m *model) handleCommand(input string) {
 
 	command := strings.ToLower(parts[0])
 	switch command {
+	case "/help", "/h":
+		helpText := []string{
+			"Available commands:",
+			"/join <#channel> - Join a channel",
+			"/part [#channel] - Leave current channel or specified channel",
+			"/switch <#channel> - Switch to a channel (or /sw)",
+			"/nick <nickname> - Change nickname",
+			"/msg <user> <message> - Send private message",
+			"/quit [reason] - Quit IRC",
+			"/help - Show this help",
+			"",
+			"Key bindings:",
+			"Tab - Switch to next channel",
+			"Shift+Tab - Switch to previous channel",
+			"Ctrl+B - Toggle sidebar",
+			"Ctrl+C - Exit application",
+		}
+		for _, line := range helpText {
+			m.addMessage(formatSystemMessage(line))
+		}
+
 	case "/join":
 		if len(parts) >= 2 {
 			channel := parts[1]
@@ -313,6 +341,28 @@ func (m *model) handleCommand(input string) {
 				reason = strings.Join(parts[1:], " ")
 			}
 			m.ircClient.Quit(reason)
+		}
+
+	case "/switch", "/sw":
+		if len(parts) >= 2 {
+			channelName := parts[1]
+			if !strings.HasPrefix(channelName, "#") {
+				channelName = "#" + channelName
+			}
+			if channel, exists := m.channels[channelName]; exists && channel.joined {
+				m.switchToChannel(channelName)
+			} else {
+				m.addMessage(formatErrorMessage(fmt.Sprintf("Channel %s not found or not joined", channelName)))
+			}
+		} else {
+			// Show available channels
+			joinedChannels := m.getJoinedChannels()
+			if len(joinedChannels) > 0 {
+				channelList := strings.Join(joinedChannels, ", ")
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Available channels: %s", channelList)))
+			} else {
+				m.addMessage(formatSystemMessage("No channels joined"))
+			}
 		}
 
 	case "/msg":

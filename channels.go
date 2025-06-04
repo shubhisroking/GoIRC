@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"strings"
 )
@@ -73,14 +74,24 @@ func (m *model) switchToChannel(channelName string) {
 			}
 
 			// Switch to new channel
+			previousChannel := m.currentChannel
 			m.currentChannel = channelName
 			m.setChannelActive(channelName, true)
 
 			// Update viewport with channel messages
-			m.messages = channel.messages
+			m.messages = make([]string, len(channel.messages))
+			copy(m.messages, channel.messages)
 			m.viewport.SetContent(strings.Join(m.messages, "\n"))
 			m.viewport.GotoBottom()
+
 			log.Printf("Successfully switched to channel: %s", channelName)
+
+			// Add a subtle indication of the channel switch if it's not during initial join
+			if previousChannel != "" && previousChannel != channelName {
+				// Add channel switch indication to the new channel's message history
+				switchMsg := formatChannelSwitchMessage(fmt.Sprintf("• Now viewing %s", channelName))
+				m.addMessage(switchMsg)
+			}
 		} else {
 			log.Printf("Channel %s not joined yet", channelName)
 		}
@@ -116,6 +127,10 @@ func (m *model) getJoinedChannels() []string {
 func (m *model) nextChannel() {
 	joinedChannels := m.getJoinedChannels()
 	if len(joinedChannels) <= 1 {
+		if len(joinedChannels) == 1 {
+			// Show message that there's only one channel
+			m.addMessage(formatSystemMessage("Only one channel available"))
+		}
 		return
 	}
 
@@ -134,12 +149,20 @@ func (m *model) nextChannel() {
 	}
 
 	nextIndex := (currentIndex + 1) % len(joinedChannels)
-	m.switchToChannel(joinedChannels[nextIndex])
+	nextChannel := joinedChannels[nextIndex]
+
+	// Show channel switch notification
+	m.addMessage(formatChannelSwitchMessage(fmt.Sprintf("→ Switched to %s (%d/%d)", nextChannel, nextIndex+1, len(joinedChannels))))
+	m.switchToChannel(nextChannel)
 }
 
 func (m *model) prevChannel() {
 	joinedChannels := m.getJoinedChannels()
 	if len(joinedChannels) <= 1 {
+		if len(joinedChannels) == 1 {
+			// Show message that there's only one channel
+			m.addMessage(formatSystemMessage("Only one channel available"))
+		}
 		return
 	}
 
@@ -158,5 +181,9 @@ func (m *model) prevChannel() {
 	}
 
 	prevIndex := (currentIndex - 1 + len(joinedChannels)) % len(joinedChannels)
-	m.switchToChannel(joinedChannels[prevIndex])
+	prevChannel := joinedChannels[prevIndex]
+
+	// Show channel switch notification
+	m.addMessage(formatChannelSwitchMessage(fmt.Sprintf("← Switched to %s (%d/%d)", prevChannel, prevIndex+1, len(joinedChannels))))
+	m.switchToChannel(prevChannel)
 }
