@@ -2,12 +2,11 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"strings"
 )
 
 func (m *model) addChannel(channelName string) {
-	log.Printf("Adding channel: %s", channelName)
+	m.logger.Debug("Adding channel: %s", channelName)
 	if _, exists := m.channels[channelName]; !exists {
 		m.channels[channelName] = &channelData{
 			name:     channelName,
@@ -16,9 +15,9 @@ func (m *model) addChannel(channelName string) {
 			joined:   false,
 		}
 		m.channelOrder = append(m.channelOrder, channelName)
-		log.Printf("Channel %s added successfully", channelName)
+		m.logger.Debug("Channel %s added successfully", channelName)
 	} else {
-		log.Printf("Channel %s already exists", channelName)
+		m.logger.Debug("Channel %s already exists", channelName)
 	}
 }
 
@@ -39,12 +38,12 @@ func (m *model) setChannelActive(channelName string, active bool) {
 }
 
 func (m *model) setChannelJoined(channelName string, joined bool) {
-	log.Printf("Setting channel %s joined status to: %v", channelName, joined)
+	m.logger.Debug("Setting channel %s joined status to: %v", channelName, joined)
 	if channel, exists := m.channels[channelName]; exists {
 		channel.joined = joined
-		log.Printf("Channel %s joined status updated successfully", channelName)
+		m.logger.Debug("Channel %s joined status updated successfully", channelName)
 	} else {
-		log.Printf("Channel %s not found when trying to set joined status", channelName)
+		m.logger.Debug("Channel %s not found when trying to set joined status", channelName)
 	}
 }
 
@@ -64,9 +63,9 @@ func (m *model) addMessageToChannel(channelName, message string) {
 }
 
 func (m *model) switchToChannel(channelName string) {
-	log.Printf("Attempting to switch to channel: %s", channelName)
+	m.logger.Debug("Attempting to switch to channel: %s", channelName)
 	if channel, exists := m.channels[channelName]; exists {
-		log.Printf("Channel %s exists, joined: %v", channelName, channel.joined)
+		m.logger.Debug("Channel %s exists, joined: %v", channelName, channel.joined)
 		if channel.joined {
 			// Deactivate current channel
 			if m.currentChannel != "" {
@@ -84,7 +83,7 @@ func (m *model) switchToChannel(channelName string) {
 			m.viewport.SetContent(strings.Join(m.messages, "\n"))
 			m.viewport.GotoBottom()
 
-			log.Printf("Successfully switched to channel: %s", channelName)
+			m.logger.Debug("Successfully switched to channel: %s", channelName)
 
 			// Add a subtle indication of the channel switch if it's not during initial join
 			if previousChannel != "" && previousChannel != channelName {
@@ -93,10 +92,10 @@ func (m *model) switchToChannel(channelName string) {
 				m.addMessage(switchMsg)
 			}
 		} else {
-			log.Printf("Channel %s not joined yet", channelName)
+			m.logger.Debug("Channel %s not joined yet", channelName)
 		}
 	} else {
-		log.Printf("Channel %s does not exist in channels map", channelName)
+		m.logger.Debug("Channel %s does not exist in channels map", channelName)
 	}
 }
 

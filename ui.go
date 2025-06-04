@@ -27,9 +27,9 @@ func (m model) View() string {
 	if m.connected {
 		uptime := time.Since(m.connectionTime).Truncate(time.Second)
 		headerText = fmt.Sprintf("IRC Client - %s @ %s (%s) - Connected for %v",
-			m.currentNick, m.currentChannel, m.config.Server, uptime)
+			m.currentNick, m.currentChannel, m.config.IRC.Server, uptime)
 	} else if m.state == stateConnecting {
-		headerText = fmt.Sprintf("IRC Client - Connecting to %s...", m.config.Server)
+		headerText = fmt.Sprintf("IRC Client - Connecting to %s...", m.config.IRC.Server)
 	} else {
 		headerText = "IRC Client - Disconnected"
 	}
@@ -92,15 +92,15 @@ func (m model) renderSetupView() string {
 	case setupNick:
 		content = append(content, systemMessageStyle.Render("Step 2/4: Nickname"))
 		content = append(content, "")
-		content = append(content, fmt.Sprintf("Server: %s (SSL: %v)", m.config.Server, m.config.UseSSL))
+		content = append(content, fmt.Sprintf("Server: %s (SSL: %v)", m.config.IRC.Server, m.config.IRC.UseSSL))
 		content = append(content, "")
 		content = append(content, fmt.Sprintf("Enter your nickname (default: %s)", defaultNick))
 
 	case setupChannels:
 		content = append(content, systemMessageStyle.Render("Step 3/4: Channels"))
 		content = append(content, "")
-		content = append(content, fmt.Sprintf("Server: %s (SSL: %v)", m.config.Server, m.config.UseSSL))
-		content = append(content, fmt.Sprintf("Nickname: %s", m.config.Nick))
+		content = append(content, fmt.Sprintf("Server: %s (SSL: %v)", m.config.IRC.Server, m.config.IRC.UseSSL))
+		content = append(content, fmt.Sprintf("Nickname: %s", m.config.IRC.Nick))
 		content = append(content, "")
 		content = append(content, fmt.Sprintf("Enter channels to join (default: %s)", defaultChannel))
 		content = append(content, helpStyle.Render("Separate multiple channels with commas (e.g., #general,#random,#help)"))
@@ -109,9 +109,9 @@ func (m model) renderSetupView() string {
 		content = append(content, systemMessageStyle.Render("Step 4/4: Confirmation"))
 		content = append(content, "")
 		content = append(content, "Configuration Summary:")
-		content = append(content, fmt.Sprintf("  Server: %s (SSL: %v)", m.config.Server, m.config.UseSSL))
-		content = append(content, fmt.Sprintf("  Nickname: %s", m.config.Nick))
-		content = append(content, fmt.Sprintf("  Channels: %s", strings.Join(m.config.Channels, ", ")))
+		content = append(content, fmt.Sprintf("  Server: %s (SSL: %v)", m.config.IRC.Server, m.config.IRC.UseSSL))
+		content = append(content, fmt.Sprintf("  Nickname: %s", m.config.IRC.Nick))
+		content = append(content, fmt.Sprintf("  Channels: %s", strings.Join(m.config.IRC.Channels, ", ")))
 		content = append(content, "")
 		content = append(content, helpStyle.Render("Press Enter to connect, or type 'r' to restart setup"))
 	}
@@ -151,7 +151,7 @@ func (m model) renderSidebar() string {
 	// User and server info
 	if m.connected && m.currentNick != "" {
 		content = append(content, sidebarItemStyle.Render(fmt.Sprintf("User: %s", m.currentNick)))
-		serverName := strings.Split(m.config.Server, ":")[0]
+		serverName := strings.Split(m.config.IRC.Server, ":")[0]
 		if len(serverName) > 18 {
 			serverName = serverName[:15] + "..."
 		}

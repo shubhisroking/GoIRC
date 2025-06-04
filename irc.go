@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto/tls"
-	"log"
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,28 +11,49 @@ import (
 
 func (m *model) connectToIRC() tea.Cmd {
 	return func() tea.Msg {
-		cfg := irc.NewConfig(m.config.Nick)
-		cfg.SSL = m.config.UseSSL
+		cfg := irc.NewConfig(m.config.IRC.Nick)
+		cfg.SSL = m.config.IRC.UseSSL
 
-		if m.config.UseSSL {
-			serverHost := strings.Split(m.config.Server, ":")[0]
+		if m.config.IRC.UseSSL {
+			serverHost := strings.Split(m.config.IRC.Server, ":")[0]
 			cfg.SSLConfig = &tls.Config{ServerName: serverHost}
 		}
 
-		cfg.Server = m.config.Server
+		// Handle port configuration
+		server := m.config.IRC.Server
+		if m.config.IRC.Port != 0 && !strings.Contains(server, ":") {
+			server = fmt.Sprintf("%s:%d", server, m.config.IRC.Port)
+		}
+		cfg.Server = server
+
+		// Set additional IRC config fields
+		if m.config.IRC.Username != "" {
+			cfg.Me.Ident = m.config.IRC.Username
+		}
+		if m.config.IRC.RealName != "" {
+			cfg.Me.Name = m.config.IRC.RealName
+		}
+		if m.config.IRC.Password != "" {
+			cfg.Pass = m.config.IRC.Password
+		}
+		if m.config.IRC.QuitMsg != "" {
+			cfg.QuitMessage = m.config.IRC.QuitMsg
+		}
+
 		cfg.NewNick = func(n string) string { return n + "_" }
 
 		c := irc.Client(cfg)
 
 		c.HandleFunc(irc.CONNECTED, func(conn *irc.Conn, line *irc.Line) {
-			log.Println("Connected to IRC")
-			log.Printf("Our actual nickname is: %s", conn.Me().Nick)
+			m.logger.LogIRCEvent("Connected to IRC server %s", m.config.IRC.Server)
+			m.logger.Debug("Our actual nickname is: %s", conn.Me().Nick)
 
 			// Join channels after connection
-			for _, channel := range m.config.Channels {
+			for _, channel := range m.config.IRC.Channels {
 				if channel != "" {
 					m.addChannel(channel)
 					conn.Join(channel)
+					m.logger.LogIRCEvent("Joining channel %s", channel)
 				}
 			}
 
@@ -42,7 +63,7 @@ func (m *model) connectToIRC() tea.Cmd {
 		})
 
 		c.HandleFunc(irc.DISCONNECTED, func(conn *irc.Conn, line *irc.Line) {
-			log.Println("Disconnected from IRC")
+			m.logger.LogIRCEvent("Disconnected from IRC server")
 			if p != nil {
 				p.Send(ircDisconnectedMsg{})
 			}
@@ -51,7 +72,7 @@ func (m *model) connectToIRC() tea.Cmd {
 		c.HandleFunc(irc.NICK, func(conn *irc.Conn, line *irc.Line) {
 			oldNick := line.Nick
 			newNick := line.Args[0]
-			log.Printf("%s changed nick to %s", oldNick, newNick)
+			m.logger.LogIRCEvent("%s changed nick to %s", oldNick, newNick)
 			if p != nil {
 				p.Send(ircNickChangeMsg{oldNick: oldNick, newNick: newNick})
 			}
@@ -61,7 +82,7 @@ func (m *model) connectToIRC() tea.Cmd {
 			user := line.Nick
 			channel := line.Args[0]
 			message := line.Args[1]
-			log.Printf("Received PRIVMSG: %s from %s in %s", message, user, channel)
+			m.logger.LogIRCMessage(channel, user, message)
 			if p != nil {
 				p.Send(ircPrivmsgMsg{user: user, message: message, channel: channel})
 			}
@@ -73,7 +94,7 @@ func (m *model) connectToIRC() tea.Cmd {
 				user = line.Host
 			}
 			message := line.Args[1]
-			log.Printf("Received notice: %s from %s", message, user)
+			m.logger.LogIRCEvent("Notice from %s: %s", user, message)
 			if p != nil {
 				p.Send(ircMessageMsg(formatNoticeMessage(user, message)))
 			}
@@ -82,7 +103,7 @@ func (m *model) connectToIRC() tea.Cmd {
 		c.HandleFunc(irc.JOIN, func(conn *irc.Conn, line *irc.Line) {
 			user := line.Nick
 			channel := line.Args[0]
-			log.Printf("%s joined %s", user, channel)
+			m.logger.LogIRCEvent("%s joined %s", user, channel)
 
 			if p != nil {
 				p.Send(ircJoinMsg{user: user, channel: channel})
@@ -96,7 +117,7 @@ func (m *model) connectToIRC() tea.Cmd {
 			if len(line.Args) > 1 {
 				message = line.Args[1]
 			}
-			log.Printf("%s left %s (%s)", user, channel, message)
+			m.logger.LogIRCEvent("%s left %s (%s)", user, channel, message)
 			if p != nil {
 				p.Send(ircMessageMsg(formatPartMessage(user, channel, message)))
 			}
@@ -108,14 +129,14 @@ func (m *model) connectToIRC() tea.Cmd {
 			if len(line.Args) > 0 {
 				message = line.Args[0]
 			}
-			log.Printf("%s quit (%s)", user, message)
+			m.logger.LogIRCEvent("%s quit (%s)", user, message)
 			if p != nil {
 				p.Send(ircMessageMsg(formatQuitMessage(user, message)))
 			}
 		})
 
 		if err := c.Connect(); err != nil {
-			log.Printf("Error connecting to IRC: %v", err)
+			m.logger.LogError("Error connecting to IRC: %v", err)
 			return ircErrorMsg{err}
 		}
 

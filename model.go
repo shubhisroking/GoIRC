@@ -11,6 +11,20 @@ import (
 )
 
 func initialModel() model {
+	// Load configuration
+	config, err := LoadConfig()
+	if err != nil {
+		// Fallback to default config if loading fails
+		config = DefaultConfig()
+	}
+
+	// Initialize logger
+	logger, err := NewLogger(config)
+	if err != nil {
+		// If logger creation fails, create a dummy logger
+		logger = &Logger{config: config}
+	}
+
 	ta := textarea.New()
 	ta.Focus()
 	ta.Prompt = "▶ "
@@ -23,28 +37,24 @@ func initialModel() model {
 	vp := viewport.New(minWidth, 10)
 
 	return model{
-		textarea:   ta,
-		messages:   []string{},
-		viewport:   vp,
-		ready:      false,
-		connected:  false,
-		width:      minWidth,
-		height:     minHeight,
-		state:      stateSetup,
-		setupPhase: setupServer,
-		config: ircConfig{
-			Server:   defaultServer,
-			Nick:     defaultNick,
-			Channels: []string{defaultChannel},
-			UseSSL:   true,
-		},
+		textarea:         ta,
+		messages:         []string{},
+		viewport:         vp,
+		ready:            false,
+		connected:        false,
+		width:            minWidth,
+		height:           minHeight,
+		state:            stateSetup,
+		setupPhase:       setupServer,
+		config:           config,
 		setupPrompt:      "",
 		autoJoinChannels: []string{},
 		channels:         make(map[string]*channelData),
 		channelOrder:     []string{},
 		activeChannels:   []string{},
-		showSidebar:      true,
-		sidebarWidth:     30,
+		showSidebar:      config.UI.ShowSidebar,
+		sidebarWidth:     config.UI.SidebarWidth,
+		logger:           logger,
 	}
 }
 
@@ -58,14 +68,14 @@ func (m *model) handleSetupInput(input string) tea.Cmd {
 	switch m.setupPhase {
 	case setupServer:
 		if input != "" {
-			m.config.Server = input
+			m.config.IRC.Server = input
 		}
 		m.setupPhase = setupNick
 		m.textarea.SetValue("")
 
 	case setupNick:
 		if input != "" {
-			m.config.Nick = input
+			m.config.IRC.Nick = input
 		}
 		m.setupPhase = setupChannels
 		m.textarea.SetValue("")
@@ -79,7 +89,7 @@ func (m *model) handleSetupInput(input string) tea.Cmd {
 					channels[i] = "#" + channels[i]
 				}
 			}
-			m.config.Channels = channels
+			m.config.IRC.Channels = channels
 		}
 		m.setupPhase = setupConfirm
 		m.textarea.SetValue("")
@@ -88,6 +98,8 @@ func (m *model) handleSetupInput(input string) tea.Cmd {
 		if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" || input == "" {
 			m.state = stateConnecting
 			m.textarea.SetValue("")
+			// Save configuration after setup is complete
+			m.saveConfig()
 			return m.connectToIRC()
 		} else if strings.ToLower(input) == "n" || strings.ToLower(input) == "no" {
 			m.setupPhase = setupServer
@@ -150,14 +162,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ircClientReadyMsg:
 		m.ircClient = msg.client
-		m.currentNick = m.config.Nick
+		m.currentNick = m.config.IRC.Nick
 
 	case ircConnectedMsg:
 		m.connected = true
 		m.state = stateConnected
 		m.addMessage(formatSystemMessage("Connected to IRC server"))
 
-		for _, channel := range m.config.Channels {
+		for _, channel := range m.config.IRC.Channels {
 			m.autoJoinChannels = append(m.autoJoinChannels, channel)
 			m.addChannel(channel)
 			if m.ircClient != nil {
@@ -242,6 +254,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						message := formatUserMessage(m.currentNick, input)
 						m.addMessageToChannel(m.currentChannel, message)
 						m.addMessage(message)
+						// Log the sent message
+						m.logger.LogIRCMessage(m.currentChannel, m.currentNick, input)
 					}
 				}
 
@@ -291,6 +305,8 @@ func (m *model) handleCommand(input string) {
 			"/switch <#channel> - Switch to a channel (or /sw)",
 			"/nick <nickname> - Change nickname",
 			"/msg <user> <message> - Send private message",
+			"/config [show|save|reload] - Manage configuration",
+			"/logging [on|off|debug on|off|status] - Control logging",
 			"/quit [reason] - Quit IRC",
 			"/help - Show this help",
 			"",
@@ -372,9 +388,87 @@ func (m *model) handleCommand(input string) {
 			m.ircClient.Privmsg(target, message)
 			displayMsg := formatUserMessage(m.currentNick, message)
 			m.addMessage(displayMsg)
+			// Log the private message
+			m.logger.LogIRCMessage(target, m.currentNick, message)
+		}
+
+	case "/config":
+		if len(parts) >= 2 {
+			switch parts[1] {
+			case "show":
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Config file: %s", m.config.FilePath)))
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Server: %s", m.config.IRC.Server)))
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Nick: %s", m.config.IRC.Nick)))
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Channels: %s", strings.Join(m.config.IRC.Channels, ", "))))
+				m.addMessage(formatSystemMessage(fmt.Sprintf("SSL: %v", m.config.IRC.UseSSL)))
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Logging: %v (Max: %d KB)", m.config.Logging.Enabled, m.config.Logging.MaxSizeKB)))
+			case "save":
+				m.saveConfig()
+				m.addMessage(formatSystemMessage("Configuration saved"))
+			case "reload":
+				if newConfig, err := LoadConfig(); err != nil {
+					m.addMessage(formatErrorMessage(fmt.Sprintf("Failed to reload config: %v", err)))
+				} else {
+					m.config = newConfig
+					m.addMessage(formatSystemMessage("Configuration reloaded"))
+				}
+			default:
+				m.addMessage(formatSystemMessage("Usage: /config [show|save|reload]"))
+			}
+		} else {
+			m.addMessage(formatSystemMessage("Usage: /config [show|save|reload]"))
+		}
+
+	case "/logging", "/log":
+		if len(parts) >= 2 {
+			switch strings.ToLower(parts[1]) {
+			case "on", "enable", "true":
+				m.config.Logging.Enabled = true
+				m.saveConfig()
+				m.addMessage(formatSystemMessage("Logging enabled"))
+			case "off", "disable", "false":
+				m.config.Logging.Enabled = false
+				m.saveConfig()
+				m.addMessage(formatSystemMessage("Logging disabled"))
+			case "debug":
+				if len(parts) >= 3 {
+					switch strings.ToLower(parts[2]) {
+					case "on", "enable", "true":
+						m.config.Logging.DebugMode = true
+						m.saveConfig()
+						m.addMessage(formatSystemMessage("Debug logging enabled"))
+					case "off", "disable", "false":
+						m.config.Logging.DebugMode = false
+						m.saveConfig()
+						m.addMessage(formatSystemMessage("Debug logging disabled"))
+					default:
+						m.addMessage(formatSystemMessage("Usage: /logging debug [on|off]"))
+					}
+				} else {
+					m.addMessage(formatSystemMessage(fmt.Sprintf("Debug logging: %v", m.config.Logging.DebugMode)))
+				}
+			case "status", "show":
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Logging: %v", m.config.Logging.Enabled)))
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Debug: %v", m.config.Logging.DebugMode)))
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Log path: %s", m.config.Logging.LogPath)))
+				m.addMessage(formatSystemMessage(fmt.Sprintf("Max size: %d KB", m.config.Logging.MaxSizeKB)))
+			default:
+				m.addMessage(formatSystemMessage("Usage: /logging [on|off|debug on|off|status]"))
+			}
+		} else {
+			m.addMessage(formatSystemMessage(fmt.Sprintf("Logging: %v (use '/logging on' or '/logging off' to toggle)", m.config.Logging.Enabled)))
 		}
 
 	default:
 		m.addMessage(formatErrorMessage("Unknown command: " + command))
+	}
+}
+
+// saveConfig saves the current configuration to disk
+func (m *model) saveConfig() {
+	if err := m.config.Save(); err != nil {
+		m.logger.LogError("Failed to save configuration: %v", err)
+	} else {
+		m.logger.Log("Configuration saved successfully")
 	}
 }

@@ -71,16 +71,10 @@ type model struct {
 
 	state            appState
 	setupPhase       setupPhase
-	config           ircConfig
+	config           *Config // Updated to use the new Config struct
 	setupPrompt      string
 	autoJoinChannels []string
-}
-
-type ircConfig struct {
-	Server   string
-	Nick     string
-	Channels []string
-	UseSSL   bool
+	logger           *Logger // Add logger instance
 }
 
 type (
