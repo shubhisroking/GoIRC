@@ -69,12 +69,13 @@ type model struct {
 	showSidebar  bool
 	sidebarWidth int
 
-	state            appState
-	setupPhase       setupPhase
-	config           *Config // Updated to use the new Config struct
-	setupPrompt      string
-	autoJoinChannels []string
-	logger           *Logger // Add logger instance
+	state                appState
+	setupPhase           setupPhase
+	config               *Config // Updated to use the new Config struct
+	setupPrompt          string
+	setupValidationError string // For showing validation errors in setup
+	autoJoinChannels     []string
+	logger               *Logger // Add logger instance
 }
 
 type (

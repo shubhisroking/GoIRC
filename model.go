@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -65,45 +67,106 @@ func (m model) Init() tea.Cmd {
 func (m *model) handleSetupInput(input string) tea.Cmd {
 	input = strings.TrimSpace(input)
 
+	// Clear previous validation error
+	m.setupValidationError = ""
+
 	switch m.setupPhase {
 	case setupServer:
-		if input != "" {
+		if input == "" {
+			// Use default server
+			m.config.IRC.Server = defaultServer
+		} else {
+			// Validate server format
+			if !m.validateServerFormat(input) {
+				m.setupValidationError = "Invalid server format. Use: hostname:port (e.g., irc.libera.chat:6697)"
+				return nil
+			}
 			m.config.IRC.Server = input
 		}
+
+		// Determine SSL based on port
+		if strings.Contains(m.config.IRC.Server, ":6697") || strings.Contains(m.config.IRC.Server, ":+6697") {
+			m.config.IRC.UseSSL = true
+		} else {
+			m.config.IRC.UseSSL = false
+		}
+
 		m.setupPhase = setupNick
 		m.textarea.SetValue("")
 
 	case setupNick:
-		if input != "" {
+		if input == "" {
+			// Use default nick
+			m.config.IRC.Nick = defaultNick
+		} else {
+			// Validate nickname
+			if !m.validateNickname(input) {
+				m.setupValidationError = "Invalid nickname. Use 3-16 characters, letters, numbers, - and _ only"
+				return nil
+			}
 			m.config.IRC.Nick = input
 		}
 		m.setupPhase = setupChannels
 		m.textarea.SetValue("")
 
 	case setupChannels:
-		if input != "" {
+		if input == "" {
+			// Use default channel
+			m.config.IRC.Channels = []string{defaultChannel}
+		} else {
+			// Validate and process channels
 			channels := strings.Split(input, ",")
-			for i, ch := range channels {
-				channels[i] = strings.TrimSpace(ch)
-				if !strings.HasPrefix(channels[i], "#") {
-					channels[i] = "#" + channels[i]
+			var validChannels []string
+
+			for _, ch := range channels {
+				ch = strings.TrimSpace(ch)
+				if ch == "" {
+					continue
 				}
+
+				// Add # prefix if missing
+				if !strings.HasPrefix(ch, "#") {
+					ch = "#" + ch
+				}
+
+				// Validate channel name
+				if !m.validateChannelName(ch) {
+					m.setupValidationError = fmt.Sprintf("Invalid channel name: %s. Use letters, numbers, - and _ only", ch)
+					return nil
+				}
+
+				validChannels = append(validChannels, ch)
 			}
-			m.config.IRC.Channels = channels
+
+			if len(validChannels) == 0 {
+				m.setupValidationError = "Please enter at least one valid channel"
+				return nil
+			}
+
+			m.config.IRC.Channels = validChannels
 		}
 		m.setupPhase = setupConfirm
 		m.textarea.SetValue("")
 
 	case setupConfirm:
-		if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" || input == "" {
+		if strings.ToLower(input) == "r" || strings.ToLower(input) == "restart" {
+			// Restart setup
+			m.setupPhase = setupServer
+			m.setupValidationError = ""
+			m.textarea.SetValue("")
+		} else if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" || input == "" {
 			m.state = stateConnecting
+			m.setupValidationError = ""
 			m.textarea.SetValue("")
 			// Save configuration after setup is complete
 			m.saveConfig()
 			return m.connectToIRC()
 		} else if strings.ToLower(input) == "n" || strings.ToLower(input) == "no" {
 			m.setupPhase = setupServer
+			m.setupValidationError = ""
 			m.textarea.SetValue("")
+		} else {
+			m.setupValidationError = "Please type 'y' to connect, 'n' to go back, or 'r' to restart"
 		}
 	}
 
@@ -152,6 +215,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyEnter:
 				value := m.textarea.Value()
 				return m, m.handleSetupInput(value)
+			case tea.KeyShiftTab:
+				// Go back to previous step
+				if m.setupPhase > setupServer {
+					m.setupPhase--
+					m.setupValidationError = ""
+					m.textarea.SetValue("")
+				}
+			case tea.KeyF1:
+				// Show help for current step
+				m.showSetupHelp()
 			}
 		}
 
@@ -464,11 +537,115 @@ func (m *model) handleCommand(input string) {
 	}
 }
 
-// saveConfig saves the current configuration to disk
-func (m *model) saveConfig() {
-	if err := m.config.Save(); err != nil {
-		m.logger.LogError("Failed to save configuration: %v", err)
-	} else {
-		m.logger.Log("Configuration saved successfully")
+func (m *model) showSetupHelp() {
+	// Add contextual help message based on current step
+	switch m.setupPhase {
+	case setupServer:
+		m.setupValidationError = "💡 Enter server:port (e.g., irc.libera.chat:6697). SSL auto-detected on port 6697"
+	case setupNick:
+		m.setupValidationError = "💡 Nickname: 3-16 chars, letters/numbers only, must start with letter or _"
+	case setupChannels:
+		m.setupValidationError = "💡 Channels: comma-separated list (e.g., general,help,dev). # is added automatically"
+	case setupConfirm:
+		m.setupValidationError = "💡 Press Enter to connect, 'n' to go back, or 'r' to restart setup"
 	}
+}
+
+// saveConfig saves the current configuration to disk
+func (m *model) saveConfig() error {
+	if m.config == nil {
+		return fmt.Errorf("configuration is nil")
+	}
+
+	// Ensure directories exist
+	configDir := filepath.Dir(m.config.FilePath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	return m.config.Save()
+}
+
+// Validation methods for setup wizard
+func (m *model) validateServerFormat(server string) bool {
+	// Basic validation: must contain hostname and port
+	if !strings.Contains(server, ":") {
+		return false
+	}
+
+	parts := strings.Split(server, ":")
+	if len(parts) != 2 {
+		return false
+	}
+
+	hostname := parts[0]
+	port := parts[1]
+
+	// Check hostname is not empty
+	if len(hostname) == 0 {
+		return false
+	}
+
+	// Check port is numeric and within valid range
+	if len(port) == 0 {
+		return false
+	}
+
+	// Remove + prefix for SSL ports if present
+	port = strings.TrimPrefix(port, "+")
+
+	// Simple numeric check
+	for _, char := range port {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (m *model) validateNickname(nick string) bool {
+	// IRC nickname validation: 3-16 characters, alphanumeric, - and _
+	if len(nick) < 3 || len(nick) > 16 {
+		return false
+	}
+
+	for i, char := range nick {
+		if i == 0 {
+			// First character must be letter or _
+			if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char == '_') {
+				return false
+			}
+		} else {
+			// Subsequent characters can be alphanumeric, - or _
+			if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+				(char >= '0' && char <= '9') || char == '_' || char == '-') {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func (m *model) validateChannelName(channel string) bool {
+	// IRC channel validation: must start with #, then alphanumeric, - and _
+	if !strings.HasPrefix(channel, "#") {
+		return false
+	}
+
+	if len(channel) < 2 || len(channel) > 50 {
+		return false
+	}
+
+	// Check characters after #
+	name := channel[1:]
+	for _, char := range name {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_' || char == '-') {
+			return false
+		}
+	}
+
+	return true
 }

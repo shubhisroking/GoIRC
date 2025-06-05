@@ -79,49 +79,241 @@ func (m model) View() string {
 func (m model) renderSetupView() string {
 	var content []string
 
-	content = append(content, headerStyle.Render("IRC Client Setup"))
-	content = append(content, "")
+	// Enhanced welcome section
+	if m.setupPhase == setupServer {
+		welcomeBox := setupWelcomeBoxStyle.Render(
+			"🎉 Welcome to GoIRC!\n\n" +
+				"Let's get you connected to your favorite IRC networks.\n" +
+				"This setup wizard will guide you through the configuration process.\n\n" +
+				"✨ Features you'll love:\n" +
+				"  • Modern terminal-based UI\n" +
+				"  • Multiple channel support\n" +
+				"  • SSL/TLS encryption\n" +
+				"  • Customizable interface")
+		content = append(content, welcomeBox)
+		content = append(content, "")
+	}
+
+	// Main header with enhanced styling
+	title := setupTitleStyle.Render("🚀 GoIRC Setup Wizard")
+	content = append(content, title)
+	content = append(content, setupSubtitleStyle.Render("Modern IRC Client Configuration"))
+
+	// Enhanced progress bar
+	progressBar := m.renderProgressBar()
+	content = append(content, progressBar)
 
 	switch m.setupPhase {
 	case setupServer:
-		content = append(content, systemMessageStyle.Render("Step 1/4: Server Configuration"))
-		content = append(content, "")
-		content = append(content, fmt.Sprintf("Enter IRC server address (default: %s)", defaultServer))
-		content = append(content, helpStyle.Render("Format: server.com:port (e.g., irc.libera.chat:6697 for SSL, irc.libera.chat:6667 for non-SSL)"))
+		content = append(content, setupStepHeaderStyle.Render("🌐 Step 1/4: Server Configuration"))
+		content = append(content, setupDescStyle.Render("Connect to your favorite IRC server. We support both standard and SSL connections."))
+
+		// Server input section with validation hints
+		serverLabel := setupLabelStyle.Render("🔗 IRC Server Address:")
+		content = append(content, serverLabel)
+
+		// Show validation error if any
+		if m.setupValidationError != "" {
+			content = append(content, setupValidationStyle.Render("⚠️ "+m.setupValidationError))
+		}
+
+		content = append(content, setupHintStyle.Render(fmt.Sprintf("Default: %s (press Enter to use default)", defaultServer)))
+
+		// Enhanced examples box with more servers
+		exampleBox := setupExampleBoxStyle.Render(
+			"💡 Popular IRC Networks:\n\n" +
+				"   🔒 Libera.Chat:     irc.libera.chat:6697 (SSL)\n" +
+				"   🔒 OFTC:           irc.oftc.net:6697 (SSL)\n" +
+				"   🔒 Rizon:          irc.rizon.net:6697 (SSL)\n" +
+				"   🔒 EFnet:          irc.efnet.org:6697 (SSL)\n" +
+				"   🔓 Freenode:       chat.freenode.net:6667\n\n" +
+				"💡 Tip: Use port 6697 for SSL, 6667 for standard")
+		content = append(content, exampleBox)
 
 	case setupNick:
-		content = append(content, systemMessageStyle.Render("Step 2/4: Nickname"))
-		content = append(content, "")
-		content = append(content, fmt.Sprintf("Server: %s (SSL: %v)", m.config.IRC.Server, m.config.IRC.UseSSL))
-		content = append(content, "")
-		content = append(content, fmt.Sprintf("Enter your nickname (default: %s)", defaultNick))
+		content = append(content, setupStepHeaderStyle.Render("👤 Step 2/4: Your Identity"))
+		content = append(content, setupDescStyle.Render("Choose a unique nickname that represents you on IRC. Make it memorable!"))
+
+		// Server confirmation with SSL indicator
+		sslIcon := "🔓"
+		sslText := "Standard"
+		if m.config.IRC.UseSSL {
+			sslIcon = "🔒"
+			sslText = "SSL/TLS"
+		}
+		serverInfo := setupInfoBoxStyle.Render(fmt.Sprintf("✅ Server Configuration Complete\n\n📡 Server: %s\n%s Connection: %s",
+			m.config.IRC.Server, sslIcon, sslText))
+		content = append(content, serverInfo)
+
+		nickLabel := setupLabelStyle.Render("👤 Your Nickname:")
+		content = append(content, nickLabel)
+
+		if m.setupValidationError != "" {
+			content = append(content, setupValidationStyle.Render("⚠️ "+m.setupValidationError))
+		}
+
+		content = append(content, setupHintStyle.Render(fmt.Sprintf("Default: %s (press Enter to use default)", defaultNick)))
+		content = append(content, setupHintStyle.Render("💡 Tip: Choose 3-16 characters, letters and numbers only"))
 
 	case setupChannels:
-		content = append(content, systemMessageStyle.Render("Step 3/4: Channels"))
-		content = append(content, "")
-		content = append(content, fmt.Sprintf("Server: %s (SSL: %v)", m.config.IRC.Server, m.config.IRC.UseSSL))
-		content = append(content, fmt.Sprintf("Nickname: %s", m.config.IRC.Nick))
-		content = append(content, "")
-		content = append(content, fmt.Sprintf("Enter channels to join (default: %s)", defaultChannel))
-		content = append(content, helpStyle.Render("Separate multiple channels with commas (e.g., #general,#random,#help)"))
+		content = append(content, setupStepHeaderStyle.Render("💬 Step 3/4: Join Channels"))
+		content = append(content, setupDescStyle.Render("Channels are where conversations happen. Join some to get started!"))
+
+		// Configuration summary with enhanced styling
+		sslIcon := "🔓"
+		sslText := "Standard"
+		if m.config.IRC.UseSSL {
+			sslIcon = "🔒"
+			sslText = "SSL/TLS"
+		}
+		configInfo := setupInfoBoxStyle.Render(fmt.Sprintf(
+			"✅ Configuration Progress\n\n📡 Server: %s\n%s Connection: %s\n👤 Nickname: %s",
+			m.config.IRC.Server, sslIcon, sslText, m.config.IRC.Nick))
+		content = append(content, configInfo)
+
+		channelLabel := setupLabelStyle.Render("💬 Channels to Join:")
+		content = append(content, channelLabel)
+
+		if m.setupValidationError != "" {
+			content = append(content, setupValidationStyle.Render("⚠️ "+m.setupValidationError))
+		}
+
+		content = append(content, setupHintStyle.Render(fmt.Sprintf("Default: %s (press Enter to use default)", defaultChannel)))
+		content = append(content, setupHintStyle.Render("💡 Separate multiple channels with commas (e.g., #general, #help, #dev)"))
+
+		// Popular channels example
+		exampleBox := setupExampleBoxStyle.Render(
+			"💡 Popular Channels by Network:\n\n" +
+				"   Libera.Chat:  #archlinux, #ubuntu, #python, #javascript\n" +
+				"   OFTC:        #debian, #tor, #spi\n" +
+				"   Rizon:       #news, #anime, #programming\n\n" +
+				"💡 Tip: Channel names start with # (automatically added)")
+		content = append(content, exampleBox)
 
 	case setupConfirm:
-		content = append(content, systemMessageStyle.Render("Step 4/4: Confirmation"))
-		content = append(content, "")
-		content = append(content, "Configuration Summary:")
-		content = append(content, fmt.Sprintf("  Server: %s (SSL: %v)", m.config.IRC.Server, m.config.IRC.UseSSL))
-		content = append(content, fmt.Sprintf("  Nickname: %s", m.config.IRC.Nick))
-		content = append(content, fmt.Sprintf("  Channels: %s", strings.Join(m.config.IRC.Channels, ", ")))
-		content = append(content, "")
-		content = append(content, helpStyle.Render("Press Enter to connect, or type 'r' to restart setup"))
+		content = append(content, setupStepHeaderStyle.Render("✅ Step 4/4: Ready to Connect"))
+		content = append(content, setupDescStyle.Render("Review your configuration and let's get you connected to IRC!"))
+
+		// Enhanced final configuration summary
+		sslIcon := "🔓"
+		sslText := "Standard Connection"
+		if m.config.IRC.UseSSL {
+			sslIcon = "🔒"
+			sslText = "Secure SSL/TLS Connection"
+		}
+
+		channelList := strings.Join(m.config.IRC.Channels, ", ")
+		if len(channelList) > 50 {
+			channelList = channelList[:47] + "..."
+		}
+
+		summaryBox := setupSummaryBoxStyle.Render(
+			"🎉 Configuration Complete!\n\n" +
+				fmt.Sprintf("📡 Server:      %s\n", m.config.IRC.Server) +
+				fmt.Sprintf("%s Connection:  %s\n", sslIcon, sslText) +
+				fmt.Sprintf("👤 Nickname:    %s\n", m.config.IRC.Nick) +
+				fmt.Sprintf("💬 Channels:    %s\n\n", channelList) +
+				"🚀 Ready to connect and start chatting!")
+		content = append(content, summaryBox)
+
+		actionHint := setupActionStyle.Render("Press Enter to connect • Type 'r' to restart setup • Ctrl+C to exit")
+		content = append(content, actionHint)
 	}
 
-	content = append(content, "")
-	content = append(content, inputBoxFocusedStyle.Render(m.textarea.View()))
-	content = append(content, "")
-	content = append(content, helpStyle.Render("Ctrl+C to exit"))
+	// Enhanced input box with better prompts
+	if m.setupPhase != setupConfirm {
+		inputBox := setupInputBoxStyle.Render(m.textarea.View())
+		content = append(content, inputBox)
+	}
 
-	return strings.Join(content, "\n")
+	// Footer with helpful controls
+	var footerText string
+	switch m.setupPhase {
+	case setupServer:
+		footerText = "💡 Pro tip: Press Tab for autocomplete • Enter to continue • Ctrl+C to exit"
+	case setupNick:
+		footerText = "💡 Your nickname is your identity on IRC • Enter to continue • Ctrl+C to exit"
+	case setupChannels:
+		footerText = "💡 You can join more channels later with /join • Enter to continue • Ctrl+C to exit"
+	default:
+		footerText = "💡 Almost there! • Enter to connect • Ctrl+C to exit"
+	}
+
+	footer := setupFooterStyle.Render(footerText)
+	content = append(content, footer)
+
+	return lipgloss.JoinVertical(lipgloss.Center, content...)
+}
+
+func (m model) renderProgressBar() string {
+	steps := []string{"Server", "Nickname", "Channels", "Confirm"}
+	current := int(m.setupPhase)
+
+	var segments []string
+	for i := range steps {
+		if i < current {
+			// Completed step
+			segments = append(segments, setupProgressCompletedStyle.Render("●"))
+		} else if i == current {
+			// Current step
+			segments = append(segments, setupProgressCurrentStyle.Render("●"))
+		} else {
+			// Pending step
+			segments = append(segments, setupProgressPendingStyle.Render("○"))
+		}
+
+		if i < len(steps)-1 {
+			// Add connection line between steps
+			if i < current {
+				segments = append(segments, setupProgressCompletedStyle.Render("━━━"))
+			} else if i == current-1 {
+				// Gradient effect: completed to current
+				segments = append(segments, setupProgressCurrentStyle.Render("━━━"))
+			} else {
+				segments = append(segments, setupProgressPendingStyle.Render("───"))
+			}
+		}
+	}
+
+	progressLine := lipgloss.JoinHorizontal(lipgloss.Left, segments...)
+
+	// Add step labels with enhanced styling
+	var labels []string
+	for i, step := range steps {
+		var style lipgloss.Style
+		var label string
+
+		if i < current {
+			style = setupProgressLabelCompletedStyle
+			label = fmt.Sprintf("✓ %s", step)
+		} else if i == current {
+			style = setupProgressLabelCurrentStyle
+			label = fmt.Sprintf("▶ %s", step)
+		} else {
+			style = setupProgressLabelPendingStyle
+			label = step
+		}
+		labels = append(labels, style.Render(label))
+	}
+
+	// Proper spacing for labels to align with progress dots
+	labelLine := lipgloss.JoinHorizontal(lipgloss.Left,
+		labels[0], "   ", labels[1], "   ", labels[2], "   ", labels[3])
+
+	// Progress percentage
+	progressPercent := fmt.Sprintf("%d%% Complete", (current*100)/len(steps))
+	percentStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"}).
+		Italic(true).
+		Align(lipgloss.Center)
+
+	return setupProgressContainerStyle.Render(
+		lipgloss.JoinVertical(lipgloss.Center,
+			progressLine,
+			"",
+			labelLine,
+			"",
+			percentStyle.Render(progressPercent)))
 }
 
 func (m model) renderSidebar() string {
