@@ -1,3 +1,20 @@
 *.log
-# binary
-goirc 
+# binaries
+goirc
+goirc.exe
+goirc_*
+
+# build artifacts
+dist/
+*.tar.gz
+*.zip
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

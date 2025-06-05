@@ -6,12 +6,13 @@ name: Go
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
 jobs:
 
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -21,8 +22,105 @@ jobs:
       with:
         go-version: '1.24.2'
 
-    - name: Build
-      run: go build -v ./...
-
     - name: Test
       run: go test -v ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24.2'
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        BINARY_NAME=goirc
+        if [ "$GOOS" = "windows" ]; then
+          BINARY_NAME="${BINARY_NAME}.exe"
+        fi
+        
+        OUTPUT_NAME="${BINARY_NAME}_${GOOS}_${GOARCH}"
+        if [ "$GOOS" = "windows" ]; then
+          OUTPUT_NAME="${OUTPUT_NAME}.exe"
+        fi
+        
+        go build -v -ldflags="-s -w" -o "$OUTPUT_NAME" .
+        
+        # Create archive
+        if [ "$GOOS" = "windows" ]; then
+          zip "${OUTPUT_NAME%.exe}.zip" "$OUTPUT_NAME"
+        else
+          tar -czf "${OUTPUT_NAME}.tar.gz" "$OUTPUT_NAME"
+        fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: goirc-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: |
+          *.zip
+          *.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          *.zip
+          *.tar.gz
+        draft: false
+        prerelease: true
+        generate_release_notes: true
+        name: GoIRC ${{ github.ref_name }}
+        body: |
+          ## GoIRC ${{ github.ref_name }}
+          
+          Cross-platform IRC client built with Go and Bubble Tea.
+          
+          ### Downloads
+          
+          **Linux:**
+          - `goirc_linux_amd64.tar.gz` - Linux x64
+          - `goirc_linux_arm64.tar.gz` - Linux ARM64
+          
+          **macOS:**
+          - `goirc_darwin_amd64.tar.gz` - macOS Intel
+          - `goirc_darwin_arm64.tar.gz` - macOS Apple Silicon
+          
+          **Windows:**
+          - `goirc_windows_amd64.zip` - Windows x64
+          
+          ### Installation
+          
+          1. Download the appropriate archive for your platform
+          2. Extract the binary
+          3. Run `./goirc` (or `goirc.exe` on Windows)
+          
+          Enjoy chatting on IRC! 🚀

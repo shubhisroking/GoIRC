@@ -8,7 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const version = "1.0.0"
+// version can be set at build time with -ldflags="-X main.version=x.y.z"
+var version = "dev"
 
 func main() {
 	// Load configuration
