@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -57,6 +58,12 @@ func initialModel() model {
 		showSidebar:      config.UI.ShowSidebar,
 		sidebarWidth:     config.UI.SidebarWidth,
 		logger:           logger,
+		// Initialize command palette
+		commandPaletteVisible:  false,
+		commandPaletteQuery:    "",
+		commandPaletteSelected: 0,
+		commandPaletteItems:    initCommandPaletteItems(),
+		commandPaletteFiltered: []commandPaletteItem{},
 	}
 }
 
@@ -292,9 +299,74 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// Handle command palette first if it's visible
+		if m.commandPaletteVisible {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.commandPaletteVisible = false
+				m.commandPaletteQuery = ""
+				m.commandPaletteSelected = 0
+				return m, nil
+			case tea.KeyCtrlP:
+				// Toggle command palette off
+				m.commandPaletteVisible = false
+				m.commandPaletteQuery = ""
+				m.commandPaletteSelected = 0
+				return m, nil
+			case tea.KeyEnter:
+				if len(m.commandPaletteFiltered) > 0 && m.commandPaletteSelected < len(m.commandPaletteFiltered) {
+					selectedItem := m.commandPaletteFiltered[m.commandPaletteSelected]
+					m.commandPaletteVisible = false
+					m.commandPaletteQuery = ""
+					m.commandPaletteSelected = 0
+					return m, m.executeCommandPaletteItem(selectedItem)
+				}
+			case tea.KeyUp, tea.KeyCtrlK:
+				if m.commandPaletteSelected > 0 {
+					m.commandPaletteSelected--
+				} else {
+					// Wrap to bottom
+					if len(m.commandPaletteFiltered) > 0 {
+						m.commandPaletteSelected = len(m.commandPaletteFiltered) - 1
+					}
+				}
+			case tea.KeyDown, tea.KeyCtrlJ:
+				if m.commandPaletteSelected < len(m.commandPaletteFiltered)-1 {
+					m.commandPaletteSelected++
+				} else {
+					// Wrap to top
+					m.commandPaletteSelected = 0
+				}
+			case tea.KeyCtrlU:
+				// Clear search query
+				m.commandPaletteQuery = ""
+				m.commandPaletteSelected = 0
+				m.filterCommandPalette()
+			case tea.KeyBackspace:
+				if len(m.commandPaletteQuery) > 0 {
+					m.commandPaletteQuery = m.commandPaletteQuery[:len(m.commandPaletteQuery)-1]
+					m.filterCommandPalette()
+				}
+			default:
+				if msg.Type == tea.KeyRunes {
+					m.commandPaletteQuery += string(msg.Runes)
+					m.filterCommandPalette()
+				}
+			}
+			return m, nil
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			return m, tea.Quit
+
+		case tea.KeyCtrlP:
+			// Open command palette
+			m.commandPaletteVisible = true
+			m.commandPaletteQuery = ""
+			m.commandPaletteSelected = 0
+			m.filterCommandPalette()
+			return m, nil
 
 		case tea.KeyTab:
 			m.nextChannel()
@@ -308,9 +380,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyCtrlN:
 			m.nextChannel()
-
-		case tea.KeyCtrlP:
-			m.prevChannel()
 
 		case tea.KeyEnter:
 			if m.textarea.Focused() {
@@ -648,4 +717,361 @@ func (m *model) validateChannelName(channel string) bool {
 	}
 
 	return true
+}
+
+func initCommandPaletteItems() []commandPaletteItem {
+	return []commandPaletteItem{
+		// Channel Management
+		{name: "Join Channel", description: "Join a new IRC channel", command: "/join", category: "Channels", icon: "+", shortcut: "", priority: 90},
+		{name: "Part Channel", description: "Leave the current channel", command: "/part", category: "Channels", icon: "-", shortcut: "", priority: 80},
+		{name: "Switch Channel", description: "Switch to a different channel", command: "/switch", category: "Channels", icon: "~", shortcut: "Tab", priority: 95},
+		{name: "Next Channel", description: "Switch to the next channel", command: "next_channel", category: "Navigation", icon: ">", shortcut: "Tab", priority: 85},
+		{name: "Previous Channel", description: "Switch to the previous channel", command: "prev_channel", category: "Navigation", icon: "<", shortcut: "Shift+Tab", priority: 85},
+		{name: "List Channels", description: "Show all joined channels", command: "list_channels", category: "Channels", icon: "=", shortcut: "", priority: 65},
+
+		// Communication
+		{name: "Send Private Message", description: "Send a private message to a user", command: "/msg", category: "Communication", icon: "@", shortcut: "", priority: 75},
+		{name: "Change Nickname", description: "Change your nickname", command: "/nick", category: "User", icon: "*", shortcut: "", priority: 70},
+
+		// Interface
+		{name: "Toggle Sidebar", description: "Show/hide the channel sidebar", command: "toggle_sidebar", category: "Interface", icon: "|", shortcut: "Ctrl+B", priority: 60},
+		{name: "Command Palette", description: "Open command palette", command: "command_palette", category: "Interface", icon: ".", shortcut: "Ctrl+P", priority: 100},
+		{name: "Clear Screen", description: "Clear the chat messages", command: "clear_screen", category: "Interface", icon: "x", shortcut: "", priority: 55},
+
+		// Information
+		{name: "Show Help", description: "Display available commands", command: "/help", category: "Help", icon: "?", shortcut: "", priority: 50},
+		{name: "Show Configuration", description: "Display current configuration", command: "/config show", category: "Configuration", icon: "&", shortcut: "", priority: 40},
+		{name: "Show Logging Status", description: "Display logging information", command: "/logging status", category: "Logging", icon: "#", shortcut: "", priority: 30},
+		{name: "Connection Status", description: "Show connection information", command: "connection_status", category: "Information", icon: "!", shortcut: "", priority: 45},
+
+		// Configuration
+		{name: "Save Configuration", description: "Save current configuration to file", command: "/config save", category: "Configuration", icon: "s", shortcut: "", priority: 35},
+		{name: "Reload Configuration", description: "Reload configuration from file", command: "/config reload", category: "Configuration", icon: "r", shortcut: "", priority: 25},
+		{name: "Enable Logging", description: "Turn on IRC logging", command: "/logging on", category: "Logging", icon: "^", shortcut: "", priority: 20},
+		{name: "Disable Logging", description: "Turn off IRC logging", command: "/logging off", category: "Logging", icon: "v", shortcut: "", priority: 15},
+
+		// System
+		{name: "Quit IRC", description: "Disconnect and exit the application", command: "/quit", category: "System", icon: "q", shortcut: "Ctrl+C", priority: 10},
+	}
+}
+
+func (m *model) getDynamicCommandPaletteItems() []commandPaletteItem {
+	var dynamicItems []commandPaletteItem
+
+	// Add channel-specific commands based on joined channels
+	if m.connected {
+		joinedChannels := m.getJoinedChannels()
+
+		// Add switch commands for each joined channel
+		for _, channel := range joinedChannels {
+			if channel != m.currentChannel {
+				dynamicItems = append(dynamicItems, commandPaletteItem{
+					name:        "Switch to " + channel,
+					description: "Switch to channel " + channel,
+					command:     "/switch " + channel,
+					category:    "Quick Switch",
+					icon:        "~",
+					shortcut:    "",
+					priority:    88,
+				})
+			}
+		}
+
+		// Add part command for current channel
+		if m.currentChannel != "" {
+			dynamicItems = append(dynamicItems, commandPaletteItem{
+				name:        "Part " + m.currentChannel,
+				description: "Leave channel " + m.currentChannel,
+				command:     "/part " + m.currentChannel,
+				category:    "Current Channel",
+				icon:        "🚪",
+				shortcut:    "",
+				priority:    85,
+			})
+		}
+
+		// Add reconnect command if disconnected
+	} else {
+		dynamicItems = append(dynamicItems, commandPaletteItem{
+			name:        "Reconnect",
+			description: "Reconnect to IRC server",
+			command:     "reconnect",
+			category:    "Connection",
+			icon:        "🔌",
+			shortcut:    "",
+			priority:    95,
+		})
+	}
+
+	// Add commonly used channels for quick joining
+	commonChannels := []string{"#general", "#help", "#random", "#dev", "#announcements"}
+	joinedChannelMap := make(map[string]bool)
+	for _, ch := range m.getJoinedChannels() {
+		joinedChannelMap[ch] = true
+	}
+
+	for _, channel := range commonChannels {
+		if !joinedChannelMap[channel] {
+			dynamicItems = append(dynamicItems, commandPaletteItem{
+				name:        "Join " + channel,
+				description: "Join channel " + channel,
+				command:     "/join " + channel,
+				category:    "Quick Join",
+				icon:        "📥",
+				shortcut:    "",
+				priority:    75,
+			})
+		}
+	}
+
+	return dynamicItems
+}
+
+func (m *model) getAllCommandPaletteItems() []commandPaletteItem {
+	// Combine static and dynamic items
+	allItems := append([]commandPaletteItem{}, m.commandPaletteItems...)
+	dynamicItems := m.getDynamicCommandPaletteItems()
+	allItems = append(allItems, dynamicItems...)
+	return allItems
+}
+
+func (m *model) filterCommandPalette() {
+	query := strings.ToLower(m.commandPaletteQuery)
+	m.commandPaletteFiltered = []commandPaletteItem{}
+
+	// Get all available items (static + dynamic)
+	allItems := m.getAllCommandPaletteItems()
+
+	// If no query, show all items sorted by priority
+	if query == "" {
+		m.commandPaletteFiltered = append(m.commandPaletteFiltered, allItems...)
+	} else {
+		// Score-based fuzzy search
+		type scoredItem struct {
+			item  commandPaletteItem
+			score int
+		}
+
+		var scored []scoredItem
+
+		for _, item := range allItems {
+			score := 0
+			itemName := strings.ToLower(item.name)
+			itemDesc := strings.ToLower(item.description)
+			itemCategory := strings.ToLower(item.category)
+
+			// Exact match in name gets highest score
+			if strings.Contains(itemName, query) {
+				score += 100
+				if strings.HasPrefix(itemName, query) {
+					score += 50 // Prefix match bonus
+				}
+			}
+
+			// Match in description
+			if strings.Contains(itemDesc, query) {
+				score += 30
+			}
+
+			// Match in category
+			if strings.Contains(itemCategory, query) {
+				score += 20
+			}
+
+			// Fuzzy matching - check for character sequence
+			if fuzzyMatch(itemName, query) {
+				score += 15
+			}
+
+			// Add priority bonus
+			score += item.priority / 10
+
+			if score > 0 {
+				scored = append(scored, scoredItem{item: item, score: score})
+			}
+		}
+
+		// Sort by score (descending)
+		for i := 0; i < len(scored); i++ {
+			for j := i + 1; j < len(scored); j++ {
+				if scored[i].score < scored[j].score {
+					scored[i], scored[j] = scored[j], scored[i]
+				}
+			}
+		}
+
+		// Extract items
+		for _, scored := range scored {
+			m.commandPaletteFiltered = append(m.commandPaletteFiltered, scored.item)
+		}
+	}
+
+	// Reset selection if it's out of bounds
+	if m.commandPaletteSelected >= len(m.commandPaletteFiltered) {
+		m.commandPaletteSelected = 0
+	}
+}
+
+// Simple fuzzy matching function
+func fuzzyMatch(text, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+
+	textRunes := []rune(text)
+
+	textIndex := 0
+	for _, p := range pattern {
+		found := false
+		for textIndex < len(textRunes) {
+			if textRunes[textIndex] == p {
+				found = true
+				textIndex++
+				break
+			}
+			textIndex++
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *model) executeCommandPaletteItem(item commandPaletteItem) tea.Cmd {
+	// Add to recently used commands (you could implement this later)
+
+	switch item.command {
+	case "toggle_sidebar":
+		m.showSidebar = !m.showSidebar
+		m.updateDimensions()
+		m.addMessage(formatSystemMessage("Sidebar toggled"))
+
+	case "next_channel":
+		m.nextChannel()
+
+	case "prev_channel":
+		m.prevChannel()
+	case "command_palette":
+		// This shouldn't happen since we're already in the palette, but just in case
+		m.commandPaletteVisible = true
+		m.commandPaletteQuery = ""
+		m.commandPaletteSelected = 0
+		m.filterCommandPalette()
+
+	case "reconnect":
+		if !m.connected {
+			m.state = stateConnecting
+			return m.connectToIRC()
+		} else {
+			m.addMessage(formatSystemMessage("Already connected to IRC server"))
+		}
+
+	case "list_channels":
+		joinedChannels := m.getJoinedChannels()
+		if len(joinedChannels) > 0 {
+			m.addMessage(formatSystemMessage("📋 Joined Channels:"))
+			for i, channel := range joinedChannels {
+				indicator := "  "
+				if channel == m.currentChannel {
+					indicator = "➤ "
+				}
+				m.addMessage(formatSystemMessage(fmt.Sprintf("%s%d. %s", indicator, i+1, channel)))
+			}
+		} else {
+			m.addMessage(formatSystemMessage("No channels joined"))
+		}
+
+	case "clear_screen":
+		m.messages = []string{}
+		if m.currentChannel != "" {
+			if channel, exists := m.channels[m.currentChannel]; exists {
+				channel.messages = []string{}
+			}
+		}
+		m.addMessage(formatSystemMessage("Screen cleared"))
+
+	case "connection_status":
+		if m.connected {
+			uptime := time.Since(m.connectionTime).Truncate(time.Second)
+			m.addMessage(formatSystemMessage("🔌 Connection Status: Connected"))
+			m.addMessage(formatSystemMessage(fmt.Sprintf("Server: %s", m.config.IRC.Server)))
+			m.addMessage(formatSystemMessage(fmt.Sprintf("Nickname: %s", m.currentNick)))
+			m.addMessage(formatSystemMessage(fmt.Sprintf("Current Channel: %s", m.currentChannel)))
+			m.addMessage(formatSystemMessage(fmt.Sprintf("Uptime: %v", uptime)))
+		} else {
+			m.addMessage(formatSystemMessage("🔌 Connection Status: Disconnected"))
+		}
+
+	default: // Handle IRC commands directly
+		if strings.HasPrefix(item.command, "/") {
+			// Execute the command directly instead of just setting it in textarea
+			switch {
+			case item.command == "/help":
+				m.handleCommand("/help")
+
+			case item.command == "/quit":
+				if m.ircClient != nil {
+					m.ircClient.Quit("Leaving via command palette")
+				}
+				return tea.Quit
+
+			case strings.HasPrefix(item.command, "/config"):
+				m.handleCommand(item.command)
+
+			case strings.HasPrefix(item.command, "/logging"):
+				m.handleCommand(item.command)
+
+			case strings.HasPrefix(item.command, "/switch "):
+				// Handle dynamic switch commands
+				m.handleCommand(item.command)
+
+			case strings.HasPrefix(item.command, "/join "):
+				// Handle dynamic join commands
+				m.handleCommand(item.command)
+
+			case strings.HasPrefix(item.command, "/part "):
+				// Handle dynamic part commands
+				m.handleCommand(item.command)
+
+			case item.command == "/join":
+				// For commands that need user input, set them in textarea with a space
+				m.textarea.SetValue(item.command + " ")
+				m.textarea.Focus()
+
+			case item.command == "/part":
+				// Part current channel if no arguments, otherwise set in textarea
+				if m.currentChannel != "" {
+					m.handleCommand("/part " + m.currentChannel)
+				} else {
+					m.textarea.SetValue(item.command + " ")
+					m.textarea.Focus()
+				}
+
+			case item.command == "/switch":
+				// Show available channels or set in textarea for manual input
+				joinedChannels := m.getJoinedChannels()
+				if len(joinedChannels) > 1 {
+					channelList := strings.Join(joinedChannels, ", ")
+					m.addMessage(formatSystemMessage("Available channels: " + channelList))
+					m.addMessage(formatSystemMessage("Use /switch <channel> or Tab/Shift+Tab to navigate"))
+				}
+				m.textarea.SetValue(item.command + " ")
+				m.textarea.Focus()
+
+			case item.command == "/nick":
+				m.textarea.SetValue(item.command + " ")
+				m.textarea.Focus()
+
+			case item.command == "/msg":
+				m.textarea.SetValue(item.command + " ")
+				m.textarea.Focus()
+
+			default:
+				// For any other IRC command, execute it directly
+				m.handleCommand(item.command)
+			}
+		}
+	}
+	return nil
 }

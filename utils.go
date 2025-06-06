@@ -41,23 +41,23 @@ func formatSystemMessage(message string) string {
 
 func formatJoinMessage(user, channel string) string {
 	timestamp := formatTimestamp()
-	return formatMessage(timestamp, joinMessageStyle.Render(fmt.Sprintf("→ %s joined %s", user, channel)))
+	return formatMessage(timestamp, joinMessageStyle.Render(fmt.Sprintf("+ %s joined %s", user, channel)))
 }
 
 func formatPartMessage(user, channel, reason string) string {
 	timestamp := formatTimestamp()
 	if reason != "" {
-		return formatMessage(timestamp, partMessageStyle.Render(fmt.Sprintf("← %s left %s (%s)", user, channel, reason)))
+		return formatMessage(timestamp, partMessageStyle.Render(fmt.Sprintf("- %s left %s (%s)", user, channel, reason)))
 	}
-	return formatMessage(timestamp, partMessageStyle.Render(fmt.Sprintf("← %s left %s", user, channel)))
+	return formatMessage(timestamp, partMessageStyle.Render(fmt.Sprintf("- %s left %s", user, channel)))
 }
 
 func formatQuitMessage(user, reason string) string {
 	timestamp := formatTimestamp()
 	if reason != "" {
-		return formatMessage(timestamp, quitMessageStyle.Render(fmt.Sprintf("⇐ %s quit (%s)", user, reason)))
+		return formatMessage(timestamp, quitMessageStyle.Render(fmt.Sprintf("< %s quit (%s)", user, reason)))
 	}
-	return formatMessage(timestamp, quitMessageStyle.Render(fmt.Sprintf("⇐ %s quit", user)))
+	return formatMessage(timestamp, quitMessageStyle.Render(fmt.Sprintf("< %s quit", user)))
 }
 
 func formatNoticeMessage(from, message string) string {
@@ -67,7 +67,7 @@ func formatNoticeMessage(from, message string) string {
 
 func formatErrorMessage(message string) string {
 	timestamp := formatTimestamp()
-	return formatMessage(timestamp, errorMessageStyle.Render(fmt.Sprintf("⚠ %s", message)))
+	return formatMessage(timestamp, errorMessageStyle.Render(fmt.Sprintf("! %s", message)))
 }
 
 func formatChannelSwitchMessage(message string) string {

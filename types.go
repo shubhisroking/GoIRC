@@ -26,6 +26,7 @@ const (
 	stateSetup appState = iota
 	stateConnecting
 	stateConnected
+	stateCommandPalette
 )
 
 type setupPhase int
@@ -44,6 +45,16 @@ type channelData struct {
 	messages []string
 	active   bool
 	joined   bool
+}
+
+type commandPaletteItem struct {
+	name        string
+	description string
+	command     string
+	category    string
+	icon        string
+	shortcut    string
+	priority    int // Higher priority items appear first
 }
 
 type model struct {
@@ -68,6 +79,13 @@ type model struct {
 	// UI state
 	showSidebar  bool
 	sidebarWidth int
+
+	// Command palette
+	commandPaletteVisible  bool
+	commandPaletteQuery    string
+	commandPaletteItems    []commandPaletteItem
+	commandPaletteSelected int
+	commandPaletteFiltered []commandPaletteItem
 
 	state                appState
 	setupPhase           setupPhase
